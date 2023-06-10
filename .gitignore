@@ -1,0 +1,8 @@
+*.exe
+*.cmo
+**/_build
+.DS_Store
+*.automaton
+*.conflicts
+*.output
+.idea
