@@ -13,54 +13,24 @@ type t =
   | `Bool
   | `Unit
   | `Func of t * t
+  | `Tuple of t list
   | `TypeVar of int (*| `DFunc of t * t *) ]
 
-module UFSet = struct
-  let father, rk = (Hashtbl.create 0, Hashtbl.create 0)
-
-  type elt = typevar_t
-
-  let rank (x : elt) =
-    match Hashtbl.find_opt rk x with
-    | Some r -> r
-    | None ->
-        Hashtbl.add rk x 0;
-        0
-
-  let rec f x =
-    match Hashtbl.find_opt father x with
-    | Some x' ->
-        if x = x' then x
-        else
-          let f' = f x' in
-          Hashtbl.replace father x f';
-          f'
-    | None ->
-        Hashtbl.add father x x;
-        x
-
-  let rec simplify typ =
-    match typ with
-    | `Int | `Bool | `Unit -> typ
-    | `Func (t1, t2) -> `Func (simplify t1, simplify t2)
-    | #typevar_t as beta -> (f beta :> t)
-
-  let merge x1 x2 =
-    let f1, f2 = (f x1, f x2) in
-    assert (f1 <> f2);
-    let c = rank f1 - rank f2 in
-    if c > 0 then Hashtbl.replace father f2 f1 else Hashtbl.replace father f1 f2;
-    if c = 0 then
-      let rk_f2 = Hashtbl.find rk f2 in
-      Hashtbl.replace rk f2 (rk_f2 + 1)
-end
+let is_typevar = function `TypeVar _ -> true | _ -> false
 
 let rec fv =
   let table = Hashtbl.create 100 in
-  fun typ ->
+  fun (typ: t) ->
     match typ with
     | #typevar_t as a -> TypeVarSet.singleton a
     | `Unit | `Int | `Bool -> TypeVarSet.empty
+    | `Tuple ts ->
+      (match Hashtbl.find_opt table typ with
+      | Some fv -> fv
+      | None ->
+        let u = (List.map fv ts) |> List.fold_left TypeVarSet.union TypeVarSet.empty  in 
+        Hashtbl.add table typ u;
+        u)
     | `Func (a, b) -> (
         match Hashtbl.find_opt table typ with
         | Some fv -> fv
@@ -90,11 +60,15 @@ let new_typevar : unit -> typevar_t =
     id := !id + 1;
     res
 
-let rec string_of : t -> string = function
+let string_of_typevar (`TypeVar i) = "'" ^ string_of_int i
+
+let rec string_of :[<t] ->string = function
   | `Int -> "int"
   | `Bool -> "bool"
   | `Unit -> "unit"
   | `TypeVar i -> "'" ^ string_of_int i
+  | `Tuple ts ->
+      Printf.sprintf "%s" (List.map string_of ts |> String.concat " * ")
   | `Func ((`Func _ (*| `DFunc _ *) as a), b) ->
       Printf.sprintf "(%s) -> %s" (string_of a) (string_of b)
   | `Func (a, b) -> Printf.sprintf "%s -> %s" (string_of a) (string_of b)
@@ -133,6 +107,7 @@ let occurs_in typ (i : typevar_t) =
   match typ with
   | #typevar_t as j -> i = j
   | `Func (_, _) -> TypeVarSet.mem i (fv typ)
+  | `Tuple _ -> TypeVarSet.mem i (fv typ)
   (* | `DFunc (_, _) -> TypeVarSet.mem i (fv typ) *)
   | `Int | `Bool | `Unit -> false
 
@@ -169,6 +144,10 @@ let subst typ (alpha : typevar_t) y =
     | `Func (a, b) ->
         if TypeVarSet.mem alpha (fv typ) then
           func (subst' a alpha y, subst' b alpha y)
+        else typ
+    | `Tuple ts ->
+        if TypeVarSet.mem alpha (fv typ) then
+          `Tuple (List.map (fun t -> subst' t alpha y) ts)
         else typ
     (* | `DFunc (a, b) ->
         if TypeVarSet.mem alpha (fv typ) then

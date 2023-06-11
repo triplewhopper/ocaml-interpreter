@@ -36,7 +36,7 @@ end
 let string_of_schema : schema -> string = function
   | { polys; fv = _; body } ->
       let string_of_list xs =
-        List.map Type.string_of (xs :> Type.t list)
+        (xs :> Type.t list) |> List.map Type.string_of 
         |> String.concat " " |> Printf.sprintf "%s. "
       in
       let s_polys =
@@ -55,8 +55,3 @@ let string_of_schema_debug : schema -> string = function
       Printf.sprintf "{polys=%s; fv=%s; body=%s}" s_polys
         (string_of_list (TypeVarSet.elements fv))
         (Type.string_of body)
-
-let instantiate (s : schema) : Type.t =
-  TypeVarSet.fold
-    (fun x acc -> Type.subst acc x (Type.new_typevar () :> Type.t))
-    s.polys s.body

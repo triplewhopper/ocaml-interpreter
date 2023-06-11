@@ -12,6 +12,7 @@
 %token <string> ID
 %token LET IN LETAND
 %token PLUS "+" TIMES "*" MINUS "-" DIV "/" MOD "mod"
+%token COMMA ","
 %token AND "&&" OR "||"
 %token EQ "=" LT "<" LE "<=" GT ">" GE ">="
 %token IF THEN ELSE
@@ -21,7 +22,7 @@
 %token SEMISEMI ";;"
 
 %start toplevel
-%type <Command.command list> toplevel
+%type <Expr.t0 Command.command list> toplevel
 %%
 
 toplevel:
@@ -54,8 +55,9 @@ expr:
   | bindings=let_rec_bindings; IN; e2=expr        {`ELetRec(bindings,e2)}
   | IF; e1=expr; THEN; e2=expr; ELSE; e3=expr     { `EIf (e1, e2, e3) }
   | FUN fun_abbr                                  { $2 }
-  | DFUN; x=ID; ARROW; e=expr                     { count:=(!count)+1;`EDFun(!count, x,e) }
+  // | DFUN; x=ID; ARROW; e=expr                     { count:=(!count)+1;`EDFun(!count, x,e) }
   | bool_expr                                     { $1 }
+  | e1=bool_expr; ","; e2=bool_expr;              { `ETuple([e1;e2]) } 
 ;
 
 fun_abbr:
@@ -112,4 +114,5 @@ atomic_expr:
   | ID              { `EVar($1) }
   | "(" ")"         { `EConstUnit }
   | "(" expr ")"    { $2 }
+
 ;

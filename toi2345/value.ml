@@ -2,29 +2,42 @@ type value =
   | VInt of int
   | VBool of bool
   | VUnit
+  | VTuple of value list 
   | VFunc of string * Expr.t * value option ref Env.t ref
   (* | VRecFun of string * [ `EFun of int * string * expr ] * value Env.t *)
   | VBuiltinFun of string * (value -> value)
-  | VDFun of string * Expr.t  (** value option ref Env.t ref *)
+ (* | VDFun of string * Expr.t  (** value option ref Env.t ref *) *)
 
-let string_of_value (v : value) : string =
+let rec string_of_value (v : value) : string =
   match v with
   | VInt i -> string_of_int i
   | VBool b -> string_of_bool b
   | VUnit -> "()"
+  | VTuple vs ->
+      "("
+      ^ (vs |> List.map string_of_value |> String.concat ", ")
+      ^ ")"
   | VFunc (var, _, _) -> Printf.sprintf "<fun (%s)>" var
   | VBuiltinFun (name, _) -> Printf.sprintf "<built-in %s>" name
-  | VDFun (name, body) ->
+  (* | VDFun (name, body) ->
       Printf.sprintf "<dfun %s, [%s]>" name
         (Expr.free_vars body |> Expr.StringSet.remove name
-       |> Expr.StringSet.elements |> String.concat ", ")
-
-let equal = function
-  | (VFunc _ | VDFun _ | VBuiltinFun _), (VFunc _ | VDFun _ | VBuiltinFun _) ->
-      raise (Invalid_argument "compare: functional value")
-  | x, y -> VBool (x = y)
+       |> Expr.StringSet.elements |> String.concat ", ") *)
 
 exception TypeError of string
+let rec equal = function
+  | (VFunc _ | (*VDFun _ |*) VBuiltinFun _), (VFunc _ | (*VDFun _ |*) VBuiltinFun _) ->
+      raise (Invalid_argument "compare: functional value")
+  | VInt x, VInt y -> VBool (x = y)
+  | VBool x, VBool y -> VBool (x = y)
+  | VUnit, VUnit -> VBool true
+  | VTuple xs, VTuple ys ->
+      VBool
+        (List.length xs = List.length ys
+        && List.for_all2 (fun x y -> equal (x, y) = VBool true) xs ys)
+  | x, y -> raise (TypeError ((string_of_value x) ^ " = " ^ (string_of_value y)))
+
+
 
 let builtins =
   let wrapper op f = (op, VBuiltinFun (op, f)) in

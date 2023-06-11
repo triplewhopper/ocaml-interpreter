@@ -41,6 +41,7 @@ rule main = parse
 | "true"       { Parser.BOOL (true) }
 | "false"      { Parser.BOOL (false) }
 
+| ","          { Parser.COMMA }
 | "("          { Parser.LPAR }
 | ")"          { Parser.RPAR }
 | ";;"         { Parser.SEMISEMI }

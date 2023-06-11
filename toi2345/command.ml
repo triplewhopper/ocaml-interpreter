@@ -1,12 +1,10 @@
-type t =
-  | CExp of Expr.t
-  (* | CDecl of string * expr *)
-  | CDecls of (string, Expr.t) Bindings.t
-  (* | CRecDecl of string * string * expr *)
-  | CRecDecls of (string, Expr.t) Bindings.t
+type 'a t =
+  | CExp of 'a
+  | CDecls of (string, 'a) Bindings.t
+  | CRecDecls of (string, 'a) Bindings.t
 
-type command = t
-let string_of_command : command -> string =
+type 'a command = 'a t
+let string_of_command : 'a command -> string =
   let str_of_decl var e = Printf.sprintf "val %s: %s" var (Expr.string_of_expr e)
   and str_of_rec_decl var e =
     Printf.sprintf "rec val %s: %s" var (Expr.string_of_expr e)

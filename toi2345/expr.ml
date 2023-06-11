@@ -1,19 +1,32 @@
+type t0 =
+  [ `EConstInt of int
+  | `EConstBool of bool
+  | `EConstUnit
+  | `EVar of string
+  | `EIf of t0 * t0 * t0
+  | `EBinaryOp of string * t0 * t0
+  | `EUnaryOp of string * t0
+  | `ECall of t0 * t0
+  | `ETuple of t0 list
+  | `EFun of int * string * t0 (* #id var body *)
+  | `ELet of (string, t0) Bindings.t * t0 (* let var = e1 in e2 *)
+  | `ELetRec of
+    (string, t0) Bindings.t * t0 (* let rec var = (e1: 'a->'b) in e2 *) ]
+
 type t =
   [ `EConstInt of int
   | `EConstBool of bool
   | `EConstUnit
   | `EVar of string
   | `EIf of t * t * t
-  | `EBinaryOp of string * t * t
-  | `EUnaryOp of string * t
   | `ECall of t * t
+  | `ETuple of t list
   | `EFun of int * string * t (* #id var body *)
-  | `EDFun of int * string * t (* #id var body *)
   | `ELet of (string, t) Bindings.t * t (* let var = e1 in e2 *)
   | `ELetRec of
     (string, t) Bindings.t * t (* let rec var = (e1: 'a->'b) in e2 *) ]
 
-let rec string_of_expr (e : t) =
+let rec string_of_expr e =
   let f = string_of_expr in
   match e with
   | `EConstInt i -> Printf.sprintf "(`EConstInt %d)" i
@@ -32,6 +45,7 @@ let rec string_of_expr (e : t) =
   | `ECall (e1, e2) ->
       let s1, s2 = (f e1, f e2) in
       Printf.sprintf "`ECall (%s, %s)" s1 s2
+  | `ETuple es -> Printf.sprintf "`ETuple ([%s])" (List.map f es |> String.concat "; ")
   | `EFun (id, var, e) -> Printf.sprintf "`EFun(%d, \"%s\", %s)" id var (f e)
   | `EDFun (id, var, e) -> Printf.sprintf "`EDFun(%d, \"%s\", %s)" id var (f e)
   | `ELet ((xs, es), e2) ->

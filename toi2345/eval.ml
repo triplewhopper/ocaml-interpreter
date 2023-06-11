@@ -1,6 +1,6 @@
 type value = Value.value
 type expr = Expr.t
-type command = Command.command
+type 'a command = 'a Command.command
 type ('a, 'b) bindings = ('a, 'b) Bindings.t
 
 exception NotCallable of value
@@ -14,7 +14,7 @@ let string_of_env env =
            | Some v -> Some (Printf.sprintf "%s=%s" x (Value.string_of_value v)))
     |> String.concat ", ")
 
-let rec eval_expr (env : value option ref Env.t) (e : expr) : value =
+let rec eval_expr (env : value option ref Env.t) (e: expr) : value =
   match e with
   | `EConstInt i -> VInt i
   | `EConstBool b -> VBool b
@@ -23,7 +23,7 @@ let rec eval_expr (env : value option ref Env.t) (e : expr) : value =
       try
         match !(Env.lookup x env) with
         | Some v -> v
-        | None -> raise (Transform.InvalidLetRecRhs e)
+        | None -> raise (Transform.InvalidLetRecRhs (`EVar x))
       with Not_found ->
         (* Printf.printf "env=%s\n" (string_of_env env); *)
         raise (Transform.UnboundVariable x))
@@ -35,21 +35,24 @@ let rec eval_expr (env : value option ref Env.t) (e : expr) : value =
       match v1 with
       | VFunc (x, e', oenv) ->
           eval_expr (!oenv |> Env.extend x (ref (Some v2))) e'
-      | VDFun (x, e') ->
+      (* | VDFun (x, e') ->
           (* Printf.printf "env=%s\n"
              ((!oenv@env |> Env.extend x (ref (Some v2))) |> string_of_env); *)
           let res = eval_expr (env |> Env.extend x (ref (Some v2))) e' in
           (* Printf.printf "<-- %s\n" (Value.string_of_value res); *)
-          res
+          res *)
       | VBuiltinFun (_, f) -> f v2
       | v -> raise (NotCallable v))
-  | `EBinaryOp (op, e1, e2) ->
+  | `ETuple es -> 
+    let vs = List.map (eval_expr env) es in 
+    (VTuple vs)
+  (* | `EBinaryOp (op, e1, e2) ->
       let e' = Transform.expand_logical_operator e in
       if e' == e then eval_expr env (`ECall (`ECall (`EVar op, e1), e2))
       else eval_expr env e'
-  | `EUnaryOp (op, e) -> eval_expr env (`ECall (`EVar op, e))
+  | `EUnaryOp (op, e) -> eval_expr env (`ECall (`EVar op, e)) *)
   | `EFun (_, var, body) -> VFunc (var, body, ref env)
-  | `EDFun (_, var, body) -> VDFun (var, body)
+  (* | `EDFun (_, var, body) -> VDFun (var, body) *)
   | `ELet ((vars, e1s), e2) ->
       let v1s = List.map (eval_expr env) e1s in
       let env' =
@@ -82,7 +85,7 @@ let rec eval_expr (env : value option ref Env.t) (e : expr) : value =
 
 type eval_result_t = Immediate of value | Named of (string, value) bindings
 
-let eval_command env (c : command) =
+let eval_command env (c :'a command) =
   match c with
   | CExp e ->
       let v = eval_expr env e in
