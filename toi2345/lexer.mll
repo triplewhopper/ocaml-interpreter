@@ -17,6 +17,7 @@ rule main = parse
 
 | "&&"         { Parser.AND }
 | "||"         { Parser.OR }
+| "::"         { Parser.CONS }
 
 | "="          { Parser.EQ }
 
@@ -35,7 +36,6 @@ rule main = parse
 | "then"       { Parser.THEN }
 | "else"       { Parser.ELSE }
 | "fun"        { Parser.FUN}
-| "dfun"       { Parser.DFUN}
 | "->"         { Parser.ARROW }
 
 | "true"       { Parser.BOOL (true) }
@@ -44,6 +44,9 @@ rule main = parse
 | ","          { Parser.COMMA }
 | "("          { Parser.LPAR }
 | ")"          { Parser.RPAR }
+| "["          { Parser.LBRACK }
+| "]"          { Parser.RBRACK }
+| ";"          { Parser.SEMI }
 | ";;"         { Parser.SEMISEMI }
 
 | digit+ as n  { Parser.INT (int_of_string n) }

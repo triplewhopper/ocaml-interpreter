@@ -8,6 +8,7 @@ type t0 =
   | `EUnaryOp of string * t0
   | `ECall of t0 * t0
   | `ETuple of t0 list
+  | `EList of t0 list
   | `EFun of int * string * t0 (* #id var body *)
   | `ELet of (string, t0) Bindings.t * t0 (* let var = e1 in e2 *)
   | `ELetRec of
@@ -21,6 +22,7 @@ type t =
   | `EIf of t * t * t
   | `ECall of t * t
   | `ETuple of t list
+  | `EList of t list
   | `EFun of int * string * t (* #id var body *)
   | `ELet of (string, t) Bindings.t * t (* let var = e1 in e2 *)
   | `ELetRec of
@@ -46,6 +48,7 @@ let rec string_of_expr e =
       let s1, s2 = (f e1, f e2) in
       Printf.sprintf "`ECall (%s, %s)" s1 s2
   | `ETuple es -> Printf.sprintf "`ETuple ([%s])" (List.map f es |> String.concat "; ")
+  | `EList es -> Printf.sprintf "`EList ([%s])" (List.map f es |> String.concat "; ")
   | `EFun (id, var, e) -> Printf.sprintf "`EFun(%d, \"%s\", %s)" id var (f e)
   | `EDFun (id, var, e) -> Printf.sprintf "`EDFun(%d, \"%s\", %s)" id var (f e)
   | `ELet ((xs, es), e2) ->
@@ -65,7 +68,7 @@ let rec string_of_expr e =
 
 module StringSet = Set.Make (String)
 
-let free_vars e =
+(* let free_vars e =
   let rec free_vars' e' =
     match e' with
     | `EConstInt _ | `EConstBool _ | `EConstUnit -> StringSet.empty
@@ -92,4 +95,4 @@ let free_vars e =
           |> StringSet.union (free_vars' e2))
   in
 
-  free_vars' e
+  free_vars' e *)

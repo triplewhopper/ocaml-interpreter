@@ -13,12 +13,16 @@
 %token LET IN LETAND
 %token PLUS "+" TIMES "*" MINUS "-" DIV "/" MOD "mod"
 %token COMMA ","
-%token AND "&&" OR "||"
+%token AND "&&" OR "||" CONS "::"
 %token EQ "=" LT "<" LE "<=" GT ">" GE ">="
 %token IF THEN ELSE
-%token LPAR "(" RPAR ")"
-%token FUN ARROW "->" DFUN
+%token LPAR "(" RPAR ")" LBRACK "[" RBRACK "]"
+%token FUN ARROW "->"
 %token REC
+%token SEMI ";" NOSEMI
+%nonassoc NOSEMI
+%nonassoc SEMI
+
 %token SEMISEMI ";;"
 
 %start toplevel
@@ -83,6 +87,11 @@ bool_factor_expr:
   | bool_factor_expr "<=" arith_expr      { `EBinaryOp("<=", $1, $3) }
   | bool_factor_expr ">" arith_expr       { `EBinaryOp(">", $1, $3) }
   | bool_factor_expr ">=" arith_expr      { `EBinaryOp(">=", $1, $3) }
+  | cons_expr                             { $1 }
+;
+
+cons_expr: 
+  | arith_expr "::" cons_expr             { `EBinaryOp("::", $1, $3) }
   | arith_expr                            { $1 }
 ;
 
@@ -114,6 +123,12 @@ atomic_expr:
   | BOOL            { `EConstBool($1) }
   | ID              { `EVar($1) }
   | "(" ")"         { `EConstUnit }
+  | "[" "]"         { `EList([]) }
+  | "["; es=semi_separated_list; "]" { `EList(es) }
   | "(" expr ")"    { $2 }
 
 ;
+semi_separated_list:
+  | e=expr %prec NOSEMI { [e] }
+  | e=expr SEMI {[e]}
+  | e=expr SEMI es=semi_separated_list { e :: es }

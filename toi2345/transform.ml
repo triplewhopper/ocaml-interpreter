@@ -24,7 +24,7 @@ let default_check f e =
   | `ECall (e1, e2)  ->
       f e1;
       f e2
-  | `ETuple es ->
+  | `ETuple es | `EList es ->
       List.iter f es
   | `EFun (_, _, e2) -> f e2
   | `EDFun (_, _, e2) -> f e2
@@ -62,6 +62,7 @@ let rec expand_operators (e : Expr.t0) : Expr.t =
   | `EIf (e1, e2, e3) -> `EIf (f e1, f e2, f e3)
   | `ECall (e1, e2) -> `ECall (f e1, f e2)
   | `ETuple es -> `ETuple (List.map f es)
+  | `EList es -> `EList (List.map f es)
   | `EFun (id, x, e2) -> `EFun (id, x, f e2)
   | `ELet ((xs, es), e2) -> `ELet ((xs, List.map f es), f e2)
   | `ELetRec ((xs, es), e2) -> `ELetRec ((xs, List.map f es), f e2)

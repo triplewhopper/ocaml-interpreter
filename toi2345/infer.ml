@@ -70,11 +70,12 @@ end = struct
     let rec apply' t = Type.memo table apply'' t
     and apply'' t =
       match t with
-      | `Int -> `Int
-      | `Bool -> `Bool
-      | `Unit -> `Unit
-      | `Func (_, t1, t2) -> Type.func (apply' t1, apply' t2)
-      | `Tuple (_, ts) -> Type.tuple (List.map apply' ts)
+      (* | `Int -> `Int
+         | `Bool -> `Bool
+         | `Unit -> `Unit
+         | `Func (_, t1, t2) -> Type.func (apply' t1, apply' t2)
+         | `Tuple (_, ts) -> Type.tuple (List.map apply' ts) *)
+      | `TyCon (con, _, ts) -> Type.constr con (List.map apply' ts)
       | `TypeVar _ as beta ->
           let t = represent beta in
           if not (Type.equal beta t) then
@@ -92,11 +93,12 @@ end = struct
     let rec apply' t = Type.memo table apply'' t
     and apply'' t =
       match t with
-      | `Int -> `Int
-      | `Bool -> `Bool
-      | `Unit -> `Unit
-      | `Func (_, t1, t2) -> Type.func (apply' t1, apply' t2)
-      | `Tuple (_, ts) -> Type.tuple (List.map apply' ts)
+      (* | `Int -> `Int
+         | `Bool -> `Bool
+         | `Unit -> `Unit
+         | `Func (_, t1, t2) -> Type.func (apply' t1, apply' t2)
+         | `Tuple (_, ts) -> Type.tuple (List.map apply' ts) *)
+      | `TyCon (con, _, ts) -> Type.constr con (List.map apply' ts)
       | `TypeVar _ as beta ->
           if Type.TypeVarSet.mem beta s.fv then
             let t = represent beta in
@@ -145,16 +147,19 @@ let instantiate (s : Schema.schema) : Type.t =
   let memory = TypeHashtbl.create 0 in
   let rec instantiate' (t : Type.t) : Type.t = Type.memo memory instantiate'' t
   and instantiate'' = function
-    | `Int -> `Int
-    | `Bool -> `Bool
-    | `Unit -> `Unit
-    | `Func (_, t1, t2) as f ->
-        if Type.TypeVarSet.disjoint (Type.fv f) s.polys then f
-        else Type.func (instantiate' t1, instantiate' t2)
-    | `Tuple (_, ts) as tuple ->
-        assert (List.length ts = 2);
-        if Type.TypeVarSet.disjoint (Type.fv tuple) s.polys then tuple
-        else Type.tuple (List.map instantiate' ts)
+    (* | `Int -> `Int
+       | `Bool -> `Bool
+       | `Unit -> `Unit
+       | `Func (_, t1, t2) as f ->
+           if Type.TypeVarSet.disjoint (Type.fv f) s.polys then f
+           else Type.func (instantiate' t1, instantiate' t2)
+       | `Tuple (_, ts) as tuple ->
+           assert (List.length ts = 2);
+           if Type.TypeVarSet.disjoint (Type.fv tuple) s.polys then tuple
+           else Type.tuple (List.map instantiate' ts) *)
+    | `TyCon (con, _, ts) as typ ->
+        if Type.TypeVarSet.disjoint (Type.fv typ) s.polys then typ
+        else Type.constr con (List.map instantiate' ts)
     | `TypeVar _ as alpha ->
         if Type.TypeVarSet.mem alpha s.polys then Hashtbl.find table alpha
         else alpha
@@ -170,23 +175,24 @@ let unify : constraint_t list -> unit =
     let nu = nu |> UnionFind.represent in
 
     match (tau, nu) with
-    | `Int, `Int | `Bool, `Bool | `Unit, `Unit -> ()
-    | `Func (_, a, b), `Func (_, a', b') ->
-        unify' (a, a');
-        unify' (b, b')
-    | `Tuple (_, ts), `Tuple (_, ts') ->
-        if List.length ts <> List.length ts' then
+    (* | `Int, `Int | `Bool, `Bool | `Unit, `Unit -> ()
+       | `Func (_, a, b), `Func (_, a', b') ->
+           unify' (a, a');
+           unify' (b, b')
+       | `Tuple (_, ts), `Tuple (_, ts') ->
+           if List.length ts <> List.length ts' then
+             raise (BadConstraintError (tau, nu))
+           else List.iter2 (fun t t' -> unify' (t, t')) ts ts' *)
+    | `TyCon (con, _, ts), `TyCon (con', _, ts') ->
+        if con <> con' then raise (BadConstraintError (tau, nu))
+        else if List.length ts <> List.length ts' then
           raise (BadConstraintError (tau, nu))
         else List.iter2 (fun t t' -> unify' (t, t')) ts ts'
     | c, (`TypeVar _ as alpha) | (`TypeVar _ as alpha), c ->
         UnionFind.merge alpha c
-    | _ -> raise (BadConstraintError (tau, nu))
   in
 
-  let res =
-    cs |> List.rev
-    |> List.iter unify'
-  in
+  let res = cs |> List.rev |> List.iter unify' in
   res
 
 let string_of_constraints c =
@@ -215,9 +221,9 @@ let generalize (c : constraint_t list) =
 
 let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
   match e with
-  | `EConstInt _ -> (`Int, [])
-  | `EConstBool _ -> (`Bool, [])
-  | `EConstUnit -> (`Unit, [])
+  | `EConstInt _ -> (Type.ty_int, [])
+  | `EConstBool _ -> (Type.ty_bool, [])
+  | `EConstUnit -> (Type.ty_unit, [])
   | `EVar x -> (
       try
         let s = schema_env |> SchemaEnv.lookup x in
@@ -232,9 +238,7 @@ let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
       let t1, c1 = infer_expr schema_env e1 in
       let t2, c2 = infer_expr schema_env e2 in
       let t3, c3 = infer_expr schema_env e3 in
-      ( t2,
-        ((`Unit, `Unit) :: (t2, t3) :: (`Unit, `Unit) :: c3)
-        @ c2 @ ((t1, `Bool) :: c1) )
+      (t2, ((t2, t3) :: c3) @ c2 @ ((t1, Type.ty_bool) :: c1))
   | `EFun (_, var, body) ->
       let alpha = Type.new_typevar () in
       let s_alpha = Schema.from_monomorphic_typevar alpha in
@@ -251,6 +255,14 @@ let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
       let ts, cs = List.map (infer_expr schema_env) es |> List.split in
       let ts' = ts and cs' = cs |> List.rev |> List.concat in
       (Type.tuple ts', cs')
+  | `EList es -> (
+      match es with
+      | [] -> (Type.ty_list (Type.new_typevar () :> Type.t), [])
+      | e :: es ->
+          let t, c = infer_expr schema_env e in
+          let ts, cs = List.map (infer_expr schema_env) es |> List.split in
+          let cs' = c :: cs |> List.rev |> List.concat in
+          (Type.ty_list t, List.map (fun t' -> (t, t')) ts @ cs'))
   | `ELet ((names, e1s), e2) ->
       let ss =
         List.map

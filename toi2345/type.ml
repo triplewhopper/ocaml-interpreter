@@ -7,38 +7,54 @@ module TypeVarSet = Set.Make (struct
 end)
 
 type t_ = t
+and t = [ `TyCon of string * int * t list | typevar_t ]
+(* [ ty_int
+   | ty_bool
+   | ty_unit
+   | `Func of int * t * t
+   | `Tuple of int * t list
+   | `TypeVar of int ] *)
 
-and t =
-  [ `Int
-  | `Bool
-  | `Unit
-  | `Func of int * t * t
-  | `Tuple of int * t list
-  | `TypeVar of int ]
-
+let tycon_func = "->"
+let tycon_tuple = "tuple"
+let tycon_int = "int"
+let tycon_bool = "bool"
+let tycon_unit = "unit"
+let tycon_list = "list"
 let is_typevar = function `TypeVar _ -> true | _ -> false
-let is_func = function `Func _ -> true | _ -> false
-let is_tuple = function `Tuple _ -> true | _ -> false
-let is_func_or_tuple = function `Func _ | `Tuple _ -> true | _ -> false
+
+let is_func = function
+  | `TyCon (con, _, _) when con = tycon_func -> true
+  | _ -> false
+
+let is_tuple = function
+  | `TyCon (con, _, _) when con = tycon_tuple -> true
+  | _ -> false
+
+let is_func_or_tuple = function
+  | `TyCon (con, _, _) when con = tycon_func || con = tycon_tuple -> true
+  | _ -> false
 
 let equal a b =
   match (a, b) with
-  | `Int, `Int -> true
-  | `Bool, `Bool -> true
-  | `Unit, `Unit -> true
+  | `TyCon (_, i, _), `TyCon (_, j, _) -> i = j
+  (* | ty_int, ty_int -> true
+     | ty_bool, ty_bool -> true
+     | ty_unit, ty_unit -> true *)
   | `TypeVar i, `TypeVar j -> i = j
-  | `Tuple (i, _), `Tuple (j, _) -> i = j
-  | `Func (i, _, _), `Func (j, _, _) -> i = j
+  (* | `Tuple (i, _), `Tuple (j, _) -> i = j
+     | `Func (i, _, _), `Func (j, _, _) -> i = j *)
   | _ -> false
 
 let hash t =
   match t with
-  | `Int -> -3
-  | `Bool -> -2
-  | `Unit -> -1
-  | `TypeVar i -> 3 * i
-  | `Tuple (i, _) -> (3 * i) + 1
-  | `Func (i, _, _) -> (3 * i) + 2
+  | `TyCon (_, i, _) -> (2 * i) + 1
+  (* | ty_int -> -3
+     | ty_bool -> -2
+     | ty_unit -> -1 *)
+  | `TypeVar i -> 2 * i
+(* | `Tuple (i, _) -> (3 * i) + 1
+   | `Func (i, _, _) -> (3 * i) + 2 *)
 
 module TypeHashtbl = Hashtbl.Make (struct
   type t = t_
@@ -62,15 +78,17 @@ let memo table f t =
       TypeHashtbl.add table t v;
       v
 
+let report_unknown_type_constructor con arity =
+  Printf.sprintf "unknown type constructor %s (arity = %d)" con arity
+  |> failwith
+
 let compressed_string_of typ =
   let table = TypeHashtbl.create 0 in
-  let rec s' (typ : t) =
+  let rec s' typ =
     match typ with
-    | `Int -> "int"
-    | `Bool -> "bool"
-    | `Unit -> "unit"
+    | `TyCon (con, _, []) -> con
     | `TypeVar i -> Printf.sprintf "'%d" i
-    | `Tuple (id, ts) ->
+    | `TyCon (con, id, ts) when con = tycon_tuple ->
         if TypeHashtbl.mem table typ then Printf.sprintf "<%d>" id
         else (
           TypeHashtbl.add table typ ();
@@ -84,13 +102,15 @@ let compressed_string_of typ =
             |> String.concat " * "
           in
           Printf.sprintf "%s as %d" ts' id)
-    | `Func (id, a, b) ->
+    | `TyCon (con, id, [ a; b ]) when con = tycon_func ->
         if TypeHashtbl.mem table typ then Printf.sprintf "<%d>" id
         else (
           TypeHashtbl.add table typ ();
           if (not (TypeHashtbl.mem table a)) && is_func a then
             Printf.sprintf "(%s) -> %s as %d" (s' a) (s' b) id
           else Printf.sprintf "%s -> %s as %d" (s' a) (s' b) id)
+    | `TyCon (con, _, args) ->
+        report_unknown_type_constructor con (List.length args)
   in
   s' typ
 
@@ -98,20 +118,27 @@ let rec string_of typ : string =
   if Options.compress_type then compressed_string_of typ
   else
     match typ with
-    | `Int -> "int"
-    | `Bool -> "bool"
-    | `Unit -> "unit"
+    | `TyCon (con, _, []) -> con
     | `TypeVar i -> Printf.sprintf "'%d" i
-    | `Tuple (_, ts) ->
+    | `TyCon (con, _, ts) when con = tycon_tuple ->
         List.map
           (fun t ->
             let s = string_of t in
-            match t with `Func _ | `Tuple _ -> "(" ^ s ^ ")" | _ -> s)
+            if is_func_or_tuple t then "(" ^ s ^ ")" else s)
           ts
         |> String.concat " * "
-    | `Func (_, (`Func _ as a), b) ->
+    | `TyCon (con, _, [ (`TyCon (con_a, _, _) as a); b ])
+      when con = tycon_func && con_a = tycon_func ->
         Printf.sprintf "(%s) -> %s" (string_of a) (string_of b)
-    | `Func (_, a, b) -> Printf.sprintf "%s -> %s" (string_of a) (string_of b)
+    | `TyCon (con, _, [ a; b ]) when con = tycon_func ->
+        Printf.sprintf "%s -> %s" (string_of a) (string_of b)
+    | `TyCon (con, _, [ (`TyCon (con', _, _) as a) ])
+      when con = tycon_list && (con' = tycon_func || con' = tycon_tuple) ->
+        Printf.sprintf "(%s) list" (string_of a)
+    | `TyCon (con, _, [ a ]) when con = tycon_list ->
+        Printf.sprintf "%s list" (string_of a)
+    | `TyCon (con, _, args) ->
+        report_unknown_type_constructor con (List.length args)
 
 let fv =
   let table = TypeHashtbl.create 0 in
@@ -119,45 +146,71 @@ let fv =
   and fv'' typ =
     match typ with
     | #typevar_t as a -> TypeVarSet.singleton a
-    | `Unit | `Int | `Bool -> TypeVarSet.empty
-    | `Tuple (_, ts) ->
-        List.map fv' ts |> List.fold_left TypeVarSet.union TypeVarSet.empty
-    | `Func (_, a, b) -> TypeVarSet.union (fv' a) (fv' b)
+    | `TyCon (_, _, []) -> TypeVarSet.empty
+    | `TyCon (_, _, [ a ]) -> fv' a
+    | `TyCon (_, _, [ a; b ]) -> TypeVarSet.union (fv' a) (fv' b)
+    | `TyCon (_, _, ts) ->
+        List.rev_map fv' ts |> List.fold_left TypeVarSet.union TypeVarSet.empty
   in
   fv'
 
-let func =
-  let funcs : t TypeHashtbl.t TypeHashtbl.t = TypeHashtbl.create 100 in
-  let n_funcs = ref 0 in
-  fun ((a : t), (b : t)) ->
-    match TypeHashtbl.find_opt funcs a with
+let constr =
+  let constrs = Hashtbl.create 100 in
+  let n_types = ref 0 in
+  fun (con : string) (ts : t list) ->
+    match Hashtbl.find_opt constrs con with
     | Some v -> (
-        match TypeHashtbl.find_opt v b with
-        | Some i -> i
+        match TypeListHashtbl.find_opt v ts with
+        | Some v -> v
         | None ->
-            n_funcs := !n_funcs + 1;
-            let res = `Func (!n_funcs, a, b) in
-            TypeHashtbl.add v b res;
+            n_types := !n_types + 1;
+            let res = `TyCon (con, !n_types, ts) in
+            TypeListHashtbl.add v ts res;
             res)
     | None ->
-        let h = TypeHashtbl.create 1 in
-        n_funcs := !n_funcs + 1;
-        let res = `Func (!n_funcs, a, b) in
-        TypeHashtbl.add h b res;
-        TypeHashtbl.add funcs a h;
+        let h = TypeListHashtbl.create 1 in
+        n_types := !n_types + 1;
+        let res = `TyCon (con, !n_types, ts) in
+        TypeListHashtbl.add h ts res;
+        Hashtbl.add constrs con h;
         res
 
-let tuple =
-  let tuples : t TypeListHashtbl.t = TypeListHashtbl.create 100 in
-  let n_tuples = ref 0 in
-  fun (ts : t list) ->
-    match TypeListHashtbl.find_opt tuples ts with
-    | Some i -> i
-    | None ->
-        n_tuples := !n_tuples + 1;
-        let res = `Tuple (!n_tuples, ts) in
-        TypeListHashtbl.add tuples ts res;
-        res
+let ty_int = constr tycon_int []
+let ty_bool = constr tycon_bool []
+let ty_unit = constr tycon_unit []
+let ty_list t = constr tycon_list [ t ]
+let func (a, b) = constr tycon_func [ a; b ]
+(* let funcs : t TypeHashtbl.t TypeHashtbl.t = TypeHashtbl.create 100 in
+   let n_funcs = ref 0 in
+   fun ((a : t), (b : t)) ->
+     match TypeHashtbl.find_opt funcs a with
+     | Some v -> (
+         match TypeHashtbl.find_opt v b with
+         | Some i -> i
+         | None ->
+             n_funcs := !n_funcs + 1;
+             let res = `Func (!n_funcs, a, b) in
+             TypeHashtbl.add v b res;
+             res)
+     | None ->
+         let h = TypeHashtbl.create 1 in
+         n_funcs := !n_funcs + 1;
+         let res = `Func (!n_funcs, a, b) in
+         TypeHashtbl.add h b res;
+         TypeHashtbl.add funcs a h;
+         res *)
+
+let tuple ts = constr tycon_tuple ts
+(* let tuples : t TypeListHashtbl.t = TypeListHashtbl.create 100 in
+   let n_tuples = ref 0 in
+   fun (ts : t list) ->
+     match TypeListHashtbl.find_opt tuples ts with
+     | Some i -> i
+     | None ->
+         n_tuples := !n_tuples + 1;
+         let res = `Tuple (!n_tuples, ts) in
+         TypeListHashtbl.add tuples ts res;
+         res *)
 
 let count typ =
   (* for debugging *)
@@ -168,9 +221,7 @@ let count typ =
       TypeHashtbl.add visit typ ();
       match typ with
       | #typevar_t -> 1
-      | `Unit | `Int | `Bool -> 1
-      | `Tuple (_, ts) -> List.map count' ts |> List.fold_left ( + ) 1
-      | `Func (_, a, b) -> 1 + count' a + count' b)
+      | `TyCon (_, _, ts) -> List.map count' ts |> List.fold_left ( + ) 1)
   in
   count' typ
 
@@ -181,19 +232,24 @@ let count_all typ =
   and count_all'' typ =
     match typ with
     | #typevar_t -> 1
-    | `Unit | `Int | `Bool -> 1
-    | `Tuple (_, ts) -> List.map count_all' ts |> List.fold_left ( + ) 1
-    | `Func (_, a, b) -> 1 + count_all' a + count_all' b
+    | `TyCon (_, _, ts) -> List.map count_all' ts |> List.fold_left ( + ) 1
   in
   count_all' typ
 
 let _ =
   assert (
-    count (tuple [ tuple [ tuple [ `Int; `Int ]; `Int ]; tuple [ `Int; `Int ] ])
+    count
+      (tuple
+         [
+           tuple [ tuple [ ty_int; ty_int ]; ty_int ]; tuple [ ty_int; ty_int ];
+         ])
     = 4);
   assert (
     count_all
-      (tuple [ tuple [ tuple [ `Int; `Int ]; `Int ]; tuple [ `Int; `Int ] ])
+      (tuple
+         [
+           tuple [ tuple [ ty_int; ty_int ]; ty_int ]; tuple [ ty_int; ty_int ];
+         ])
     = 9)
 
 let rec mapsto return_typ (arg_typ : t list) =
@@ -204,8 +260,9 @@ let rec mapsto return_typ (arg_typ : t list) =
 
 let () =
   assert (
-    [ `Int; `Int; `Int; `Int ] |> mapsto `Bool
-    = func (`Int, func (`Int, func (`Int, func (`Int, `Bool)))))
+    [ ty_int; ty_int; ty_int; ty_int ]
+    |> mapsto ty_bool
+    = func (ty_int, func (ty_int, func (ty_int, func (ty_int, ty_bool)))))
 
 let new_typevar : unit -> typevar_t =
   let id = ref 0 in
@@ -221,19 +278,19 @@ let () =
   else
     let assert_equal a b = assert (a = string_of b) in
     let tv i = `TypeVar i in
-    `Unit |> assert_equal "unit";
-    `Int |> assert_equal "int";
-    `Bool |> assert_equal "bool";
+    ty_unit |> assert_equal "unit";
+    ty_int |> assert_equal "int";
+    ty_bool |> assert_equal "bool";
     tv 1 |> assert_equal "'1";
     tv 42 |> assert_equal "'42";
-    [ `Int; `Int ] |> mapsto `Int |> assert_equal "int -> int -> int";
+    [ ty_int; ty_int ] |> mapsto ty_int |> assert_equal "int -> int -> int";
     (* typical binary operator for integers *)
-    [ `Int ]
-    |> mapsto ([ `Int ] |> mapsto `Int)
+    [ ty_int ]
+    |> mapsto ([ ty_int ] |> mapsto ty_int)
     |> assert_equal "int -> int -> int";
     (* typical binary operator for integers *)
-    [ `Int; `Bool ] |> mapsto `Int |> assert_equal "int -> bool -> int";
-    [ tv 1; tv 1 ] |> mapsto `Bool |> assert_equal "'1 -> '1 -> bool";
+    [ ty_int; ty_bool ] |> mapsto ty_int |> assert_equal "int -> bool -> int";
+    [ tv 1; tv 1 ] |> mapsto ty_bool |> assert_equal "'1 -> '1 -> bool";
     (* equality *)
     [ tv 1 ] |> mapsto (tv 1) |> assert_equal "'1 -> '1";
 
@@ -248,10 +305,7 @@ let () =
 let occurs_in typ (i : typevar_t) =
   match typ with
   | #typevar_t as j -> i = j
-  | `Func _ -> TypeVarSet.mem i (fv typ)
-  | `Tuple _ -> TypeVarSet.mem i (fv typ)
-  (* | `DFunc (_, _) -> TypeVarSet.mem i (fv typ) *)
-  | `Int | `Bool | `Unit -> false
+  | `TyCon _ -> TypeVarSet.mem i (fv typ)
 
 let () =
   let tv i = `TypeVar i in
@@ -260,9 +314,9 @@ let () =
     let res = fv typ in
     List.map tv ans |> TypeVarSet.of_list |> TypeVarSet.equal res
   in
-  assert (test_fv `Int []);
-  assert (test_fv `Bool []);
-  assert (test_fv `Unit []);
+  assert (test_fv ty_int []);
+  assert (test_fv ty_bool []);
+  assert (test_fv ty_unit []);
   for i = 1 to 100 do
     assert (test_fv (tv i) [ i ])
   done;
@@ -271,9 +325,10 @@ let () =
       assert (test_fv (func (tv i, tv j)) [ i; j ])
     done
   done;
-  assert (test_fv (func (`Int, a)) [ 1 ]);
-  assert (test_fv (func (`Int, func (`Bool, a))) [ 1 ]);
+  assert (test_fv (func (ty_int, a)) [ 1 ]);
+  assert (test_fv (func (ty_int, func (ty_bool, a))) [ 1 ]);
   assert (
     test_fv
-      (func (`Int, func (`Bool, func (a, func (`Int, func (func (c, b), b))))))
+      (func
+         (ty_int, func (ty_bool, func (a, func (ty_int, func (func (c, b), b))))))
       [ 1; 2; 3 ])
