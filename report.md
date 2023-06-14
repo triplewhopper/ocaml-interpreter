@@ -15,8 +15,8 @@ $ ls
 dune-project report.md    report.pdf   toi2345
 $ cd toi2345
 $ ls
-bindings.ml  dune         eval.ml      infer.ml     lexer.mll    options.ml   schema.ml    type.ml
-command.ml   env.ml       expr.ml      input.in     main.ml      parser.mly   transform.ml value.ml
+bindings.ml  dune         eval.ml      infer.ml     input.in     main.ml      parser.mly   transform.ml value.ml
+command.ml   env.ml       expr.ml      infer.mli    lexer.mll    options.ml   schema.ml    type.ml
 $ dune build
 Entering directory '.../08-231017'
 File "toi2345/parser.mly", line 20, characters 22-26:

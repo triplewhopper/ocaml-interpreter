@@ -91,7 +91,6 @@ end = struct
     let table = TypeHashtbl.create 0 in
     let rec apply' t = Type.memo table apply'' t
     and apply'' t =
-      (* Printf.printf "apply'' %s\n" (Type.string_of t); *)
       match t with
       | `Int -> `Int
       | `Bool -> `Bool
@@ -165,59 +164,28 @@ let instantiate (s : Schema.schema) : Type.t =
 let unify : constraint_t list -> unit =
  fun (cs : constraint_t list) ->
   let rec unify' (tau, nu) =
-    (* Printf.printf "find(";
-       flush stdout; *)
     let tau = UnionFind.find tau in
-    (* Printf.printf ")";
-       Printf.printf "represent(";
-       flush stdout; *)
     let tau = tau |> UnionFind.represent in
-    (* Printf.printf ")";
-       Printf.printf "find(";
-       flush stdout; *)
     let nu = UnionFind.find nu in
-    (* Printf.printf ")";
-       flush stdout;
-       Printf.printf "represent(";
-       flush stdout; *)
     let nu = nu |> UnionFind.represent in
-    (* Printf.printf ")";
-       flush stdout; *)
+
     match (tau, nu) with
     | `Int, `Int | `Bool, `Bool | `Unit, `Unit -> ()
     | `Func (_, a, b), `Func (_, a', b') ->
-        (* Printf.printf "unify'2("; *)
-        (* flush stdout; *)
         unify' (a, a');
-        (* Printf.printf "\\unify'2)"; *)
-        (* flush stdout; *)
-        (* Printf.printf "unify'3("; *)
         unify' (b, b')
-        (* Printf.printf "\\unify'3)"; *)
-        (* flush stdout *)
     | `Tuple (_, ts), `Tuple (_, ts') ->
         if List.length ts <> List.length ts' then
           raise (BadConstraintError (tau, nu))
         else List.iter2 (fun t t' -> unify' (t, t')) ts ts'
     | c, (`TypeVar _ as alpha) | (`TypeVar _ as alpha), c ->
-        (* Printf.printf "merge(";
-           flush stdout; *)
         UnionFind.merge alpha c
-    (* Printf.printf "\\merge)";
-       flush stdout *)
     | _ -> raise (BadConstraintError (tau, nu))
   in
 
   let res =
-    (* Printf.printf "length=%d, " (List.length cs);
-       flush stdout; *)
     cs |> List.rev
-    |> List.iter (fun c ->
-           (* Printf.printf "unify'iter(";
-              flush stdout; *)
-           unify' c
-           (* Printf.printf "\\unify'iter)\n";
-              flush stdout *))
+    |> List.iter unify'
   in
   res
 
@@ -232,16 +200,8 @@ let generalize (c : constraint_t list) =
   fun (env : SchemaEnv.t) ->
     let env' = SchemaEnv.map UnionFind.apply_schema env in
     fun (t : Type.t) ->
-      (* Printf.printf "g-apply(";
-         Printf.printf "%d, %d" (Type.count t) (Type.count_all t);
-         Printf.printf ", t=%s " (Type.string_of t);
-         flush stdout; *)
       let typ = UnionFind.apply t in
-      (* Printf.printf ")";
-         flush stdout; *)
       assert (Type.equal typ (UnionFind.apply typ));
-      (* assert (Type.fv typ |> Type.TypeVarSet.is_empty |> not); *)
-      (* assert (env'.fv |> Type.TypeVarSet.is_empty); *)
       let polys = Type.TypeVarSet.diff (Type.fv typ) env'.fv in
       let s = Schema.schema polys typ in
       if Options.debug_flag then (
@@ -251,7 +211,6 @@ let generalize (c : constraint_t list) =
         Printf.printf "t = %s\n" (Type.string_of t);
         Printf.printf "generalize %s to %s\n" (Type.string_of typ)
           (Schema.string_of_schema s));
-      (* assert (Type.TypeVarSet.is_empty polys |> not); *)
       s
 
 let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
@@ -262,11 +221,7 @@ let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
   | `EVar x -> (
       try
         let s = schema_env |> SchemaEnv.lookup x in
-        (* Printf.printf "instantiate(%s, " x;
-           flush stdout; *)
         let typ = s |> instantiate in
-        (* Printf.printf ")";
-           flush stdout; *)
         if Options.debug_flag then
           Printf.printf "instantiate %s : %s to  %s\n" x
             (Schema.string_of_schema s)
@@ -301,11 +256,7 @@ let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
         List.map
           (fun e ->
             let t, c = infer_expr schema_env e in
-            (* Printf.printf "generalize (";
-               flush stdout; *)
             let s = generalize c schema_env t in
-            (* Printf.printf ")";
-               flush stdout; *)
             s)
           e1s
       in
@@ -336,33 +287,6 @@ let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
       let s2, c2 = infer_expr (schema_env |> SchemaEnv.extends names s1s) e2 in
       (s2, c2 @ c1s')
 
-(* match cs with
-    | (`Int, `Int) :: cs' | (`Bool, `Bool) :: cs' | (`Unit, `Unit) :: cs' ->
-       unify cs'
-   | (`Func (a, b), `Func (a', b')) :: cs' -> unify ((a, a') :: (b, b') :: cs')
-   (* | (`DFunc (a, b), `DFunc (a', b')) :: cs' ->
-       unify ((a, a') :: (b, b') :: cs') *)
-   | (t, (`TypeVar _ as alpha)) :: cs' | ((`TypeVar _ as alpha), t) :: cs' -> (
-       if alpha = t then unify cs'
-       else if alpha |> Type.occurs_in t then
-         raise (RecursiveOccurenceError (alpha, t))
-       else
-         match t with
-         | `TypeVar _ as beta ->
-             if Substs.UFSet.f alpha <> Substs.UFSet.f beta then
-               Substs.UFSet.merge alpha beta;
-             unify cs'
-         | _ ->
-             let substs' =
-               cs'
-               |> List.map (fun (lhs, rhs) ->
-                      (Type.subst lhs alpha t, Type.subst rhs alpha t))
-               |> unify
-             in
-             assert (not (Substitutes.mem alpha substs'));
-             substs' |> Substitutes.add alpha t)
-   | (t1, t2) :: _ -> raise (BadConstraintError (t1, t2)) *)
-
 let infer_cexp env (e : Expr.t) =
   let (t : Type.t), (c : constraint_t list) = infer_expr env e in
   unify c;
@@ -372,18 +296,7 @@ let infer_cexp env (e : Expr.t) =
     Printf.printf "constraints=%s\n" (string_of_constraints c);
     Printf.printf "father=%s\n" UnionFind.(string_of_father ()));
   let t' = UnionFind.apply t in
-  (* Printf.printf "\\apply)"; *)
-  (* flush stdout; *)
-  (* (try assert (UnionFind.apply t' == t')
-     with e ->
-       Printf.printf "t' = %s\n" (Type.string_of t');
-       Printf.printf "apply t' = %s\n" (Type.string_of (UnionFind.apply t'));
-       Printf.printf "apply t' = %s\n"
-         (Type.string_of (UnionFind.apply t' |> UnionFind.apply));
-       raise e); *)
-  (* Printf.printf "map-apply_schema(";flush stdout; *)
   let env' = SchemaEnv.map UnionFind.apply_schema env in
-  (* Printf.printf "\\map-apply_schema)";flush stdout; *)
   (t', env')
 
 let infer_command' (env : SchemaEnv.t) (cmd : Expr.t Command.command) :
