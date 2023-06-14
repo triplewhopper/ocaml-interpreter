@@ -92,24 +92,23 @@ let check_command (env : Schema.SchemaEnv.t)
       check_unbound_variables (env.env |> List.map (fun (k, _) -> k)) e;
       check_bindings_uniqueness e
   | CDecls (names, exprs) ->
-      if Debug.debug_flag then
+      if Options.debug_flag then
         Printf.printf "number of decl: %d\n" (List.length names);
       let e' = `ELet ((names, exprs), `EConstUnit) in
       check_unbound_variables (env.env |> List.map (fun (k, _) -> k)) e';
       check_bindings_uniqueness e'
   | CRecDecls (names, es) ->
-      if Debug.debug_flag then
+      if Options.debug_flag then
         Printf.printf "number of rec decl: %d\n" (List.length names);
       let e' = `ELetRec ((names, es), `EConstUnit) in
       check_unbound_variables (env.env |> List.map (fun (k, _) -> k)) e';
       check_bindings_uniqueness e'
 
-let transform_command (s_env : Schema.SchemaEnv.t)
+let transform_command (_ : Schema.SchemaEnv.t)
     (cmd : Expr.t0 Command.command) : Expr.t Command.t
     =
   match cmd with
   | CExp e ->
-      let _ = s_env in
       Command.CExp (expand_operators e)
   | CDecls (names, exprs) ->
       Command.CDecls (names, exprs |> List.map expand_operators)

@@ -1,8 +1,8 @@
 module TypeVarSet = Type.TypeVarSet
+
 type schema = { polys : TypeVarSet.t; fv : TypeVarSet.t; body : Type.t }
 
-
-let schema polys body=
+let schema polys body =
   { polys; fv = TypeVarSet.diff (Type.fv body) polys; body }
 
 module SchemaEnv = struct
@@ -36,8 +36,8 @@ end
 let string_of_schema : schema -> string = function
   | { polys; fv = _; body } ->
       let string_of_list xs =
-        (xs :> Type.t list) |> List.map Type.string_of 
-        |> String.concat " " |> Printf.sprintf "%s. "
+        (xs :> Type.t list)
+        |> List.map Type.string_of |> String.concat " " |> Printf.sprintf "%s. "
       in
       let s_polys =
         if TypeVarSet.is_empty polys then ""
@@ -45,7 +45,7 @@ let string_of_schema : schema -> string = function
       in
       Printf.sprintf "%s%s" s_polys (Type.string_of body)
 
-let string_of_schema_debug : schema -> string = function
+(* let string_of_schema_debug : schema -> string = function
   | { polys; fv; body } ->
       let string_of_list xs =
         List.map Type.string_of (xs :> Type.t list)
@@ -54,4 +54,13 @@ let string_of_schema_debug : schema -> string = function
       let s_polys = string_of_list (TypeVarSet.elements polys) in
       Printf.sprintf "{polys=%s; fv=%s; body=%s}" s_polys
         (string_of_list (TypeVarSet.elements fv))
-        (Type.string_of body)
+        (Type.string_of body) *)
+
+let string_of_senv (env : SchemaEnv.t) =
+  Printf.sprintf "(fv:[%s]) {%s}"
+    ((env.fv |> Type.TypeVarSet.elements :> Type.t list)
+    |> List.map Type.string_of |> String.concat ", ")
+    (List.map
+       (fun (k, v) -> Printf.sprintf "\"%s\": %s" k (string_of_schema v))
+       env.env
+    |> String.concat "; ")

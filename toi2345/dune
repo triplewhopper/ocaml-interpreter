@@ -4,7 +4,8 @@
  (flags
   ; (:standard -warn-error -a -g))
   (:standard -warn-error -a))
- (promote (until-clean)))
+ (promote (until-clean))
+ )
 
 (ocamllex
  (modules lexer))

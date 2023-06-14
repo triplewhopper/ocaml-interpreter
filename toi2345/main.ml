@@ -16,20 +16,29 @@ let iter3 f xs ys zs =
 let print_results results =
   results
   |> List.iter (function
-       | s, Eval.Immediate value ->
+       | s, Eval.Immediate (Some value) ->
            assert (List.length s = 1);
            Printf.printf "- : %s = %s\n"
              (Schema.string_of_schema (List.hd s))
              (Value.string_of_value value)
-       | s, Eval.Named (names, values) ->
+       | s, Eval.Immediate None ->
+           assert (List.length s = 1);
+           Printf.printf "- : %s\n" (Schema.string_of_schema (List.hd s))
+       | s, Eval.Named (names, Some values) ->
            iter3
              (fun name s value ->
                Printf.printf "val %s: %s = %s\n" name
                  (Schema.string_of_schema s)
                  (Value.string_of_value value))
-             names s values)
+             names s values
+       | s, Eval.Named (names, None) ->
+           List.iter2
+             (fun name s ->
+               Printf.printf "val %s: %s\n" name (Schema.string_of_schema s))
+             names s)
 
 let read_eval_print (s_env : Infer.SchemaEnv.t) env =
+  if Options.inference_only then (Printf.eprintf "Inference only mode\n"; flush stderr);
   let s_env = ref s_env and env = ref env and eof_flag = ref false in
   while not !eof_flag do
     print_string "# ";
@@ -48,17 +57,10 @@ let read_eval_print (s_env : Infer.SchemaEnv.t) env =
                let s, s_env' = Infer.infer_command s_env cmd in
                let res, env' = Eval.eval_command env cmd in
                results := (s, res) :: !results;
-               if Debug.debug_flag then (
+               if Options.debug_flag then (
                  print_results [ (s, res) ];
-                 Printf.printf "schema env = (fv:[%s]) {%s}\n"
-                   ((s_env'.fv |> Type.TypeVarSet.elements :> Type.t list)
-                   |> List.map Type.string_of |> String.concat ", ")
-                   (List.map
-                      (fun (k, v) ->
-                        Printf.sprintf "\"%s\": %s" k
-                          (Schema.string_of_schema v))
-                      s_env'.env
-                   |> String.concat "; ");
+                 Printf.printf "schema env = %s\n"
+                   (Schema.string_of_senv s_env');
                  Printf.printf "env={%s}\n"
                    (List.filter_map
                       (fun (k, v) ->
@@ -77,7 +79,9 @@ let read_eval_print (s_env : Infer.SchemaEnv.t) env =
                (s_env', env'))
              (!s_env, !env)
       in
-      if not Debug.debug_flag then print_results (List.rev !results);
+      if not Options.debug_flag then (
+        print_results (List.rev !results);
+        flush stdout);
       s_env := s_env';
       env := env'
     with

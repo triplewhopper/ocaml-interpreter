@@ -53,12 +53,13 @@ let_expr:
 expr:
   | bindings=let_bindings; IN; e2=expr            {`ELet(bindings,e2) }
   | bindings=let_rec_bindings; IN; e2=expr        {`ELetRec(bindings,e2)}
-  | IF; e1=expr; THEN; e2=expr; ELSE; e3=expr     { `EIf (e1, e2, e3) }
   | FUN fun_abbr                                  { $2 }
-  // | DFUN; x=ID; ARROW; e=expr                     { count:=(!count)+1;`EDFun(!count, x,e) }
-  | bool_expr                                     { $1 }
-  | e1=bool_expr; ","; e2=bool_expr;              { `ETuple([e1;e2]) } 
+  | IF; e1=expr; THEN; e2=expr; ELSE; e3=expr     { `EIf (e1, e2, e3) }
+  | bool_expr                  { $1 }  
+  | bool_expr "," expr                   { `ETuple([$1;$3]) }
+    // | DFUN; x=ID; ARROW; e=expr                     { count:=(!count)+1;`EDFun(!count, x,e) }
 ;
+
 
 fun_abbr:
   |ID ARROW expr                        { count:=(!count)+1;`EFun(!count, $1,$3) }

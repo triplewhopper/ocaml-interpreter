@@ -14,7 +14,7 @@ let string_of_env env =
            | Some v -> Some (Printf.sprintf "%s=%s" x (Value.string_of_value v)))
     |> String.concat ", ")
 
-let rec eval_expr (env : value option ref Env.t) (e: expr) : value =
+let rec eval_expr (env : value option ref Env.t) (e : expr) : value =
   match e with
   | `EConstInt i -> VInt i
   | `EConstBool b -> VBool b
@@ -43,14 +43,14 @@ let rec eval_expr (env : value option ref Env.t) (e: expr) : value =
           res *)
       | VBuiltinFun (_, f) -> f v2
       | v -> raise (NotCallable v))
-  | `ETuple es -> 
-    let vs = List.map (eval_expr env) es in 
-    (VTuple vs)
+  | `ETuple es ->
+      let vs = List.map (eval_expr env) es in
+      VTuple vs
   (* | `EBinaryOp (op, e1, e2) ->
-      let e' = Transform.expand_logical_operator e in
-      if e' == e then eval_expr env (`ECall (`ECall (`EVar op, e1), e2))
-      else eval_expr env e'
-  | `EUnaryOp (op, e) -> eval_expr env (`ECall (`EVar op, e)) *)
+         let e' = Transform.expand_logical_operator e in
+         if e' == e then eval_expr env (`ECall (`ECall (`EVar op, e1), e2))
+         else eval_expr env e'
+     | `EUnaryOp (op, e) -> eval_expr env (`ECall (`EVar op, e)) *)
   | `EFun (_, var, body) -> VFunc (var, body, ref env)
   (* | `EDFun (_, var, body) -> VDFun (var, body) *)
   | `ELet ((vars, e1s), e2) ->
@@ -83,32 +83,46 @@ let rec eval_expr (env : value option ref Env.t) (e: expr) : value =
       | VBool false -> eval_expr env e3
       | _ -> raise (Value.TypeError (Value.string_of_value v1)))
 
-type eval_result_t = Immediate of value | Named of (string, value) bindings
+type eval_result_t =
+  | Immediate of value option
+  | Named of string list * value list option
 
-let eval_command env (c :'a command) =
+let eval_command env (c : 'a command) =
   match c with
   | CExp e ->
-      let v = eval_expr env e in
-      (Immediate v, env)
+      if Options.inference_only then (
+        Printf.eprintf "type inference done.\n";
+        flush stderr;
+        (Immediate None, env))
+      else
+        let v = eval_expr env e in
+        (Immediate (Some v), env)
   | CDecls (names, es) ->
-      let vs = List.map (eval_expr env) es in
-      let vs' = vs |> List.map (fun v -> ref (Some v)) in
-      let env' = env |> Env.extends names vs' in
-      (Named (names, vs), env')
+      if Options.inference_only then (
+        Printf.eprintf "type inference done.\n";
+        flush stderr;
+        (Named (names, None), env))
+      else
+        let vs = List.map (eval_expr env) es in
+        let vs' = vs |> List.map (fun v -> ref (Some v)) in
+        let env' = env |> Env.extends names vs' in
+        (Named (names, Some vs), env')
   | CRecDecls (names, es) ->
-      (* Printf.printf "vars=%s, es=%s\n" *)
-      (* (names |> String.concat ", ")
-         (es |> List.map Syntax.string_of_expr |> String.concat ", "); *)
-      let env' =
-        List.fold_left
-          (fun env0 var -> env0 |> Env.extend var (ref None))
-          env names
-      in
-      let vs = List.map (eval_expr env') es in
-      List.iter2
-        (fun var rhs ->
-          let v = env' |> Env.lookup var in
-          assert (Option.is_none !v);
-          v := Some rhs)
-        names vs;
-      (Named (names, vs), env')
+      if Options.inference_only then (
+        Printf.eprintf "type inference done.\n";
+        flush stderr;
+        (Named (names, None), env))
+      else
+        let env' =
+          List.fold_left
+            (fun env0 var -> env0 |> Env.extend var (ref None))
+            env names
+        in
+        let vs = List.map (eval_expr env') es in
+        List.iter2
+          (fun var rhs ->
+            let v = env' |> Env.lookup var in
+            assert (Option.is_none !v);
+            v := Some rhs)
+          names vs;
+        (Named (names, Some vs), env')

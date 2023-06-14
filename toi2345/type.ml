@@ -1,46 +1,200 @@
 type typevar_t = [ `TypeVar of int ]
 
-let () = Printexc.record_backtrace true
-
 module TypeVarSet = Set.Make (struct
   type t = typevar_t
 
   let compare (`TypeVar i) (`TypeVar j) = i - j
 end)
 
-type t =
+type t_ = t
+
+and t =
   [ `Int
   | `Bool
   | `Unit
-  | `Func of t * t
-  | `Tuple of t list
-  | `TypeVar of int (*| `DFunc of t * t *) ]
+  | `Func of int * t * t
+  | `Tuple of int * t list
+  | `TypeVar of int ]
 
 let is_typevar = function `TypeVar _ -> true | _ -> false
+let is_func = function `Func _ -> true | _ -> false
+let is_tuple = function `Tuple _ -> true | _ -> false
+let is_func_or_tuple = function `Func _ | `Tuple _ -> true | _ -> false
 
-let rec fv =
-  let table = Hashtbl.create 100 in
-  fun (typ: t) ->
+let equal a b =
+  match (a, b) with
+  | `Int, `Int -> true
+  | `Bool, `Bool -> true
+  | `Unit, `Unit -> true
+  | `TypeVar i, `TypeVar j -> i = j
+  | `Tuple (i, _), `Tuple (j, _) -> i = j
+  | `Func (i, _, _), `Func (j, _, _) -> i = j
+  | _ -> false
+
+let hash t =
+  match t with
+  | `Int -> -3
+  | `Bool -> -2
+  | `Unit -> -1
+  | `TypeVar i -> 3 * i
+  | `Tuple (i, _) -> (3 * i) + 1
+  | `Func (i, _, _) -> (3 * i) + 2
+
+module TypeHashtbl = Hashtbl.Make (struct
+  type t = t_
+
+  let equal : t -> t -> bool = equal
+  let hash : t -> int = hash
+end)
+
+module TypeListHashtbl = Hashtbl.Make (struct
+  type t = t_ list
+
+  let equal : t -> t -> bool = List.for_all2 equal
+  let hash (x : t) = x |> List.map hash |> Hashtbl.hash
+end)
+
+let memo table f t =
+  match TypeHashtbl.find_opt table t with
+  | Some v -> v
+  | None ->
+      let v = f t in
+      TypeHashtbl.add table t v;
+      v
+
+let compressed_string_of typ =
+  let table = TypeHashtbl.create 0 in
+  let rec s' (typ : t) =
+    match typ with
+    | `Int -> "int"
+    | `Bool -> "bool"
+    | `Unit -> "unit"
+    | `TypeVar i -> Printf.sprintf "'%d" i
+    | `Tuple (id, ts) ->
+        if TypeHashtbl.mem table typ then Printf.sprintf "<%d>" id
+        else (
+          TypeHashtbl.add table typ ();
+          let ts' =
+            List.map
+              (fun t ->
+                if (not (TypeHashtbl.mem table t)) && is_func_or_tuple t then
+                  "(" ^ s' t ^ ")"
+                else s' t)
+              ts
+            |> String.concat " * "
+          in
+          Printf.sprintf "%s as %d" ts' id)
+    | `Func (id, a, b) ->
+        if TypeHashtbl.mem table typ then Printf.sprintf "<%d>" id
+        else (
+          TypeHashtbl.add table typ ();
+          if (not (TypeHashtbl.mem table a)) && is_func a then
+            Printf.sprintf "(%s) -> %s as %d" (s' a) (s' b) id
+          else Printf.sprintf "%s -> %s as %d" (s' a) (s' b) id)
+  in
+  s' typ
+
+let rec string_of typ : string =
+  if Options.compress_type then compressed_string_of typ
+  else
+    match typ with
+    | `Int -> "int"
+    | `Bool -> "bool"
+    | `Unit -> "unit"
+    | `TypeVar i -> Printf.sprintf "'%d" i
+    | `Tuple (_, ts) ->
+        List.map
+          (fun t ->
+            let s = string_of t in
+            match t with `Func _ | `Tuple _ -> "(" ^ s ^ ")" | _ -> s)
+          ts
+        |> String.concat " * "
+    | `Func (_, (`Func _ as a), b) ->
+        Printf.sprintf "(%s) -> %s" (string_of a) (string_of b)
+    | `Func (_, a, b) -> Printf.sprintf "%s -> %s" (string_of a) (string_of b)
+
+let fv =
+  let table = TypeHashtbl.create 0 in
+  let rec fv' typ = memo table fv'' typ
+  and fv'' typ =
     match typ with
     | #typevar_t as a -> TypeVarSet.singleton a
     | `Unit | `Int | `Bool -> TypeVarSet.empty
-    | `Tuple ts ->
-      (match Hashtbl.find_opt table typ with
-      | Some fv -> fv
-      | None ->
-        let u = (List.map fv ts) |> List.fold_left TypeVarSet.union TypeVarSet.empty  in 
-        Hashtbl.add table typ u;
-        u)
-    | `Func (a, b) -> (
-        match Hashtbl.find_opt table typ with
-        | Some fv -> fv
-        | None ->
-            let u = TypeVarSet.union (fv a) (fv b) in
-            Hashtbl.add table typ u;
-            u)
+    | `Tuple (_, ts) ->
+        List.map fv' ts |> List.fold_left TypeVarSet.union TypeVarSet.empty
+    | `Func (_, a, b) -> TypeVarSet.union (fv' a) (fv' b)
+  in
+  fv'
 
-let func (a, b) = `Func (a, b)
-(* let dfunc (a, b) = `DFunc (a, b) *)
+let func =
+  let funcs : t TypeHashtbl.t TypeHashtbl.t = TypeHashtbl.create 100 in
+  let n_funcs = ref 0 in
+  fun ((a : t), (b : t)) ->
+    match TypeHashtbl.find_opt funcs a with
+    | Some v -> (
+        match TypeHashtbl.find_opt v b with
+        | Some i -> i
+        | None ->
+            n_funcs := !n_funcs + 1;
+            let res = `Func (!n_funcs, a, b) in
+            TypeHashtbl.add v b res;
+            res)
+    | None ->
+        let h = TypeHashtbl.create 1 in
+        n_funcs := !n_funcs + 1;
+        let res = `Func (!n_funcs, a, b) in
+        TypeHashtbl.add h b res;
+        TypeHashtbl.add funcs a h;
+        res
+
+let tuple =
+  let tuples : t TypeListHashtbl.t = TypeListHashtbl.create 100 in
+  let n_tuples = ref 0 in
+  fun (ts : t list) ->
+    match TypeListHashtbl.find_opt tuples ts with
+    | Some i -> i
+    | None ->
+        n_tuples := !n_tuples + 1;
+        let res = `Tuple (!n_tuples, ts) in
+        TypeListHashtbl.add tuples ts res;
+        res
+
+let count typ =
+  (* for debugging *)
+  let visit = TypeHashtbl.create 0 in
+  let rec count' (typ : t) =
+    if TypeHashtbl.mem visit typ then 0
+    else (
+      TypeHashtbl.add visit typ ();
+      match typ with
+      | #typevar_t -> 1
+      | `Unit | `Int | `Bool -> 1
+      | `Tuple (_, ts) -> List.map count' ts |> List.fold_left ( + ) 1
+      | `Func (_, a, b) -> 1 + count' a + count' b)
+  in
+  count' typ
+
+let count_all typ =
+  (* for debugging *)
+  let sum = TypeHashtbl.create 0 in
+  let rec count_all' typ = memo sum count_all'' typ
+  and count_all'' typ =
+    match typ with
+    | #typevar_t -> 1
+    | `Unit | `Int | `Bool -> 1
+    | `Tuple (_, ts) -> List.map count_all' ts |> List.fold_left ( + ) 1
+    | `Func (_, a, b) -> 1 + count_all' a + count_all' b
+  in
+  count_all' typ
+
+let _ =
+  assert (
+    count (tuple [ tuple [ tuple [ `Int; `Int ]; `Int ]; tuple [ `Int; `Int ] ])
+    = 4);
+  assert (
+    count_all
+      (tuple [ tuple [ tuple [ `Int; `Int ]; `Int ]; tuple [ `Int; `Int ] ])
+    = 9)
 
 let rec mapsto return_typ (arg_typ : t list) =
   match arg_typ with
@@ -62,51 +216,39 @@ let new_typevar : unit -> typevar_t =
 
 let string_of_typevar (`TypeVar i) = "'" ^ string_of_int i
 
-let rec string_of :[<t] ->string = function
-  | `Int -> "int"
-  | `Bool -> "bool"
-  | `Unit -> "unit"
-  | `TypeVar i -> "'" ^ string_of_int i
-  | `Tuple ts ->
-      Printf.sprintf "%s" (List.map string_of ts |> String.concat " * ")
-  | `Func ((`Func _ (*| `DFunc _ *) as a), b) ->
-      Printf.sprintf "(%s) -> %s" (string_of a) (string_of b)
-  | `Func (a, b) -> Printf.sprintf "%s -> %s" (string_of a) (string_of b)
-(* | `DFunc (((`Func _|`DFunc _) as a), b) ->
-       Printf.sprintf "(%s) ~> %s" (string_of a) (string_of b)
-   | `DFunc (a, b) -> Printf.sprintf "%s ~> %s" (string_of a) (string_of b) *)
-
 let () =
-  let assert_equal a b = assert (a = string_of b) in
-  let tv i = `TypeVar i in
-  `Unit |> assert_equal "unit";
-  `Int |> assert_equal "int";
-  `Bool |> assert_equal "bool";
-  tv 1 |> assert_equal "'1";
-  tv 42 |> assert_equal "'42";
-  [ `Int; `Int ] |> mapsto `Int |> assert_equal "int -> int -> int";
-  (* typical binary operator for integers *)
-  [ `Int ]
-  |> mapsto ([ `Int ] |> mapsto `Int)
-  |> assert_equal "int -> int -> int";
-  (* typical binary operator for integers *)
-  [ `Int; `Bool ] |> mapsto `Int |> assert_equal "int -> bool -> int";
-  [ tv 1; tv 1 ] |> mapsto `Bool |> assert_equal "'1 -> '1 -> bool";
-  (* equality *)
-  [ tv 1 ] |> mapsto (tv 1) |> assert_equal "'1 -> '1";
+  if Options.compress_type then ()
+  else
+    let assert_equal a b = assert (a = string_of b) in
+    let tv i = `TypeVar i in
+    `Unit |> assert_equal "unit";
+    `Int |> assert_equal "int";
+    `Bool |> assert_equal "bool";
+    tv 1 |> assert_equal "'1";
+    tv 42 |> assert_equal "'42";
+    [ `Int; `Int ] |> mapsto `Int |> assert_equal "int -> int -> int";
+    (* typical binary operator for integers *)
+    [ `Int ]
+    |> mapsto ([ `Int ] |> mapsto `Int)
+    |> assert_equal "int -> int -> int";
+    (* typical binary operator for integers *)
+    [ `Int; `Bool ] |> mapsto `Int |> assert_equal "int -> bool -> int";
+    [ tv 1; tv 1 ] |> mapsto `Bool |> assert_equal "'1 -> '1 -> bool";
+    (* equality *)
+    [ tv 1 ] |> mapsto (tv 1) |> assert_equal "'1 -> '1";
 
-  (* id x *)
-  let f_t = [ tv 1; tv 2 ] |> mapsto (tv 3) in
-  [ f_t; tv 2; tv 1 ]
-  |> mapsto (tv 3)
-  |> assert_equal "('1 -> '2 -> '3) -> '2 -> '1 -> '3"
+    (* id x *)
+    let f_t = [ tv 1; tv 2 ] |> mapsto (tv 3) in
+    [ f_t; tv 2; tv 1 ]
+    |> mapsto (tv 3)
+    |> assert_equal "('1 -> '2 -> '3) -> '2 -> '1 -> '3"
 
 (* flip f x y = f y x *)
 
 let occurs_in typ (i : typevar_t) =
   match typ with
   | #typevar_t as j -> i = j
-  | `Func (_, _) -> TypeVarSet.mem i (fv typ)
+  | `Func _ -> TypeVarSet.mem i (fv typ)
   | `Tuple _ -> TypeVarSet.mem i (fv typ)
   (* | `DFunc (_, _) -> TypeVarSet.mem i (fv typ) *)
   | `Int | `Bool | `Unit -> false
@@ -135,66 +277,3 @@ let () =
     test_fv
       (func (`Int, func (`Bool, func (a, func (`Int, func (func (c, b), b))))))
       [ 1; 2; 3 ])
-
-let subst typ (alpha : typevar_t) y =
-  (* substitute typevar x in typ with type y *)
-  let rec subst' typ (alpha : typevar_t) y =
-    match typ with
-    | #typevar_t as beta -> if beta = alpha then y else typ
-    | `Func (a, b) ->
-        if TypeVarSet.mem alpha (fv typ) then
-          func (subst' a alpha y, subst' b alpha y)
-        else typ
-    | `Tuple ts ->
-        if TypeVarSet.mem alpha (fv typ) then
-          `Tuple (List.map (fun t -> subst' t alpha y) ts)
-        else typ
-    (* | `DFunc (a, b) ->
-        if TypeVarSet.mem alpha (fv typ) then
-          dfunc (subst' a alpha y, subst' b alpha y)
-        else typ *)
-    | `Int | `Bool | `Unit -> typ
-  in
-  (match y with
-  | #typevar_t -> assert true
-  | _ -> assert (not (alpha |> occurs_in y)));
-  if alpha |> occurs_in typ then subst' typ alpha y else typ
-
-let () =
-  let a, b, c = (`TypeVar 1, `TypeVar 2, `TypeVar 3) in
-  let faa, fab, fba, fbb =
-    (func (a, a), func (a, b), func (b, a), func (b, b))
-  in
-  try
-    assert (subst `Int a `Int = `Int);
-    assert (subst `Bool a `Int = `Bool);
-    assert (subst `Bool a `Int = `Bool);
-    assert (subst `Bool a `Bool = `Bool);
-    assert (subst faa a a = faa);
-    assert (subst faa a b = fbb);
-    assert (subst faa b a = faa);
-    assert (subst faa b b = faa);
-    assert (subst fab a a = fab);
-    assert (subst fab a b = fbb);
-    assert (subst fab b a = faa);
-    assert (subst fab b b = fab);
-    assert (subst fba a a = fba);
-    assert (subst fba a b = fbb);
-    assert (subst fba b a = faa);
-    assert (subst fba b b = fba);
-    assert (subst fbb a a = fbb);
-    assert (subst fbb a b = fbb);
-    assert (subst fbb b a = faa);
-    assert (subst fbb b b = fbb);
-    assert (
-      subst (func (func (func (b, b), func (b, b)), func (b, b))) b a
-      = func (func (func (a, a), func (a, a)), func (a, a)));
-    assert (
-      subst (func (func (func (b, b), func (`Int, b)), func (b, b))) b a
-      = func (func (func (a, a), func (`Int, a)), func (a, a)));
-    assert (
-      subst (func (func (func (b, c), func (`Int, b)), func (c, b))) b a
-      = func (func (func (a, c), func (`Int, a)), func (c, a)))
-  with Assert_failure _ as e ->
-    Printf.printf "error: %s\n" (Printexc.to_string e);
-    Printexc.print_backtrace stdout

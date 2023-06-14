@@ -1,229 +1,231 @@
 type constraint_t = Type.t * Type.t
 
 module SchemaEnv = Schema.SchemaEnv
+module TypeHashtbl = Type.TypeHashtbl
 
 exception RecursiveOccurenceError of Type.typevar_t * Type.t
 exception BadConstraintError of Type.t * Type.t
 
-module UnionFind = struct
-  let father : (Type.t, Type.t) Hashtbl.t = Hashtbl.create 0
-  let rk : (Type.t, int) Hashtbl.t = Hashtbl.create 0
-  let representative : (Type.t, Type.t) Hashtbl.t = Hashtbl.create 0
+let ( = ) : int -> int -> bool = ( = )
+
+module UnionFind : sig
+  val find : Type.t -> Type.t
+  val merge : Type.t -> Type.t -> unit
+  val represent : Type.t -> Type.t
+  val apply : Type.t -> Type.t
+  val apply_schema : Schema.schema -> Schema.schema
+  val string_of_father : unit -> string
+end = struct
+  let father : Type.t TypeHashtbl.t = TypeHashtbl.create 0
+  let rk : int TypeHashtbl.t = TypeHashtbl.create 0
+  let representative : Type.t TypeHashtbl.t = TypeHashtbl.create 0
 
   let rank x =
-    match Hashtbl.find_opt rk x with
+    match TypeHashtbl.find_opt rk x with
     | Some r -> r
     | None ->
-        Hashtbl.add rk x 0;
+        TypeHashtbl.add rk x 0;
         0
 
   let rec find x =
-    match Hashtbl.find_opt father x with
+    match TypeHashtbl.find_opt father x with
     | Some x' ->
-        if x = x' then x
+        if Type.equal x x' then x
         else
           let f' = find x' in
-          Hashtbl.replace father x f';
+          TypeHashtbl.replace father x f';
           f'
     | None ->
-        Hashtbl.add father x x;
-        if not (Type.is_typevar x) then Hashtbl.add representative x x;
+        TypeHashtbl.add father x x;
+        if not (Type.is_typevar x) then TypeHashtbl.add representative x x;
         x
 
   let represent x =
     let f = find x in
-    match Hashtbl.find_opt representative f with Some x' -> x' | None -> f
+    match TypeHashtbl.find_opt representative f with Some x' -> x' | None -> f
 
-  let rec apply = function
-    | `Int -> `Int
-    | `Bool -> `Bool
-    | `Unit -> `Unit
-    | `Func (t1, t2) ->
-        if t1 != t2 then `Func (apply t1, apply t2)
-        else
-          let t1' = apply t1 in
-          `Func (t1', t1')
-    | `Tuple ts ->
-        List.fold_left
-          (fun acc t ->
-            match List.assq_opt t acc with
-            | Some t' -> (t, t') :: acc
-            | None -> (t, apply t) :: acc)
-          [] ts
-        |> List.split |> snd |> List.rev
-        |> fun ts' -> `Tuple ts'
-    | `TypeVar _ as beta ->
-        let t = represent beta in
-        if beta <> t then
-          if beta |> Type.occurs_in t then
-            raise (RecursiveOccurenceError (beta, t))
-          else apply t
-        else t
-
-  let apply_schema (s : Schema.schema) =
-    let rec apply' = function
+  let apply t =
+    let table = TypeHashtbl.create 0 in
+    let rec apply' t = Type.memo table apply'' t
+    and apply'' t =
+      match t with
       | `Int -> `Int
       | `Bool -> `Bool
       | `Unit -> `Unit
-      | `Func (t1, t2) ->
-          if t1 != t2 then `Func (apply' t1, apply' t2)
-          else
-            let t1' = apply' t1 in
-            `Func (t1', t1')
-      | `Tuple ts ->
-          List.fold_left
-            (fun acc t ->
-              match List.assq_opt t acc with
-              | Some t' -> (t, t') :: acc
-              | None -> (t, apply t) :: acc)
-            [] ts
-          |> List.split |> snd |> List.rev
-          |> fun ts' -> `Tuple ts'
+      | `Func (_, t1, t2) -> Type.func (apply' t1, apply' t2)
+      | `Tuple (_, ts) -> Type.tuple (List.map apply' ts)
+      | `TypeVar _ as beta ->
+          let t = represent beta in
+          if not (Type.equal beta t) then
+            if beta |> Type.occurs_in t then
+              raise (RecursiveOccurenceError (beta, t))
+            else apply' t
+          else t
+    in
+    let t' = apply' t in
+    assert (Type.equal t' (apply' t));
+    t'
+
+  let apply_schema (s : Schema.schema) =
+    let table = TypeHashtbl.create 0 in
+    let rec apply' t = Type.memo table apply'' t
+    and apply'' t =
+      (* Printf.printf "apply'' %s\n" (Type.string_of t); *)
+      match t with
+      | `Int -> `Int
+      | `Bool -> `Bool
+      | `Unit -> `Unit
+      | `Func (_, t1, t2) -> Type.func (apply' t1, apply' t2)
+      | `Tuple (_, ts) -> Type.tuple (List.map apply' ts)
       | `TypeVar _ as beta ->
           if Type.TypeVarSet.mem beta s.fv then
-            let t = find beta in
-            if beta |> Type.occurs_in t && beta <> t then
-              raise (RecursiveOccurenceError (beta, t))
+            let t = represent beta in
+            if not (Type.equal beta t) then
+              if beta |> Type.occurs_in t then
+                raise (RecursiveOccurenceError (beta, t))
+              else apply' t
             else t
           else beta
     in
     let body' = apply' s.body in
-    assert (body' = apply s.body);
+    assert (Type.equal body' (apply' body'));
     Schema.schema s.polys body'
-  (* TODO fix this inefficiency *)
 
   let merge x1 x2 =
     let f1, f2 = (find x1, find x2) in
-    if f1 <> f2 then (
-      if not (Type.is_typevar f1) then Hashtbl.replace representative f2 f1;
-      if not (Type.is_typevar f2) then Hashtbl.replace representative f1 f2;
+    if not (Type.equal f1 f2) then (
+      if not (Type.is_typevar f1) then TypeHashtbl.replace representative f2 f1;
+      if not (Type.is_typevar f2) then TypeHashtbl.replace representative f1 f2;
       let c = rank f1 - rank f2 in
-      if c > 0 then Hashtbl.replace father f2 f1
-      else Hashtbl.replace father f1 f2;
+      if c > 0 then TypeHashtbl.replace father f2 f1
+      else TypeHashtbl.replace father f1 f2;
       if c = 0 then
-        let rk_f2 = Hashtbl.find rk f2 in
-        Hashtbl.replace rk f2 (rk_f2 + 1))
+        let rk_f2 = TypeHashtbl.find rk f2 in
+        TypeHashtbl.replace rk f2 (rk_f2 + 1))
 
   let string_of_father () =
-    let groups = Hashtbl.create 0 in
-    father |> Hashtbl.to_seq
-    |> Seq.iter (fun (alpha, _) -> Hashtbl.add groups (find alpha) alpha);
-    groups |> Hashtbl.to_seq
-    |> Seq.group (fun (alpha, _) (beta, _) -> alpha = beta)
-    |> Seq.map (fun g ->
-           g
-           |> Seq.map (fun (_, t) -> Type.string_of t)
-           |> List.of_seq |> String.concat ", " |> Printf.sprintf "[%s]")
+    let groups = TypeHashtbl.create 0 in
+    father |> TypeHashtbl.to_seq_keys
+    |> Seq.iter (fun alpha ->
+           match TypeHashtbl.find_opt groups (find alpha) with
+           | Some vs -> vs := alpha :: !vs
+           | None -> TypeHashtbl.add groups (find alpha) (ref [ alpha ]));
+    groups |> TypeHashtbl.to_seq
+    |> Seq.map (fun (_, (g : Type.t list ref)) ->
+           !g |> List.map Type.string_of |> String.concat ", "
+           |> Printf.sprintf "[%s]")
     |> List.of_seq |> String.concat "; " |> Printf.sprintf "[%s]"
-  (* |> Seq.map (fun (s1, s2) -> Printf.sprintf "%s : %s" s1 s2)
-     |> List.of_seq |> String.concat "; " |> Printf.sprintf "[%s]" *)
 end
 
-(* module Substitutes = Map.Make (struct
-     type t = Type.typevar_t
-
-     let compare (`TypeVar i) (`TypeVar j) = i - j
-   end) *)
-
-(* let simplify_subst (substs : Type.t Substitutes.t) : [`Func of Type.t * Type.t | `Int | `Bool | `Unit] Substitutes.t=
-   let substs' =
-     substs |> Substitutes.to_seq
-     |> Seq.filter (fun (alpha, t) ->
-            match t with
-            | `TypeVar _ as beta -> Substs.UFSet.f alpha = Substs.UFSet.f beta
-            | _ -> true)
-   in
-   assert (
-     substs'
-     |> Seq.for_all (fun (_, t) ->
-            match t with #Type.typevar_t -> false | _ -> true));
-
-   substs'
-   |> Seq.map (fun (alpha, t) -> (Substs.UFSet.f alpha, Substs.UFSet.normalize t))
-   |> Substitutes.of_seq *)
-
-(* let infer_ii_i (t1 : Type.t) (c1 : constraint_t list) (t2 : Type.t)
-       (c2 : constraint_t list) =
-     (`Int, ((t2, `Int) :: (t1, `Int) :: c2) @ c1)
-
-   let infer_ii_b (t1 : Type.t) (c1 : constraint_t list) (t2 : Type.t)
-       (c2 : constraint_t list) =
-     (`Bool, ((t2, `Int) :: (t1, `Int) :: c2) @ c1)
-
-   let infer_bb_b (t1 : Type.t) (c1 : constraint_t list) (t2 : Type.t)
-       (c2 : constraint_t list) =
-     (`Bool, ((t2, `Bool) :: (t1, `Bool) :: c2) @ c1)
-
-   let infer_eq (t1 : Type.t) (c1 : constraint_t list) (t2 : Type.t)
-       (c2 : constraint_t list) =
-     (`Bool, ((t1, t2) :: c2) @ c1)
-
-   let binaryOpEnv =
-     ref
-       [
-         ("+", infer_ii_i);
-         ("-", infer_ii_i);
-         ("*", infer_ii_i);
-         ("/", infer_ii_i);
-         ("mod", infer_ii_i);
-         ("||", infer_bb_b);
-         ("&&", infer_bb_b);
-         ("=", infer_eq);
-         ("<", infer_ii_b);
-         ("<=", infer_ii_b);
-         (">", infer_ii_b);
-         (">=", infer_ii_b);
-       ]
-
-   let register_binary_op (op : string) f =
-     binaryOpEnv := !binaryOpEnv |> Env.extend op f
-
-   let infer_binaryOp (_ : SchemaEnv.t) (op : string) = Env.lookup op !binaryOpEnv *)
 let instantiate (s : Schema.schema) : Type.t =
   let table = Hashtbl.create (Type.TypeVarSet.cardinal s.polys) in
   Type.TypeVarSet.iter
     (fun alpha -> Hashtbl.add table alpha (Type.new_typevar () :> Type.t))
     s.polys;
-  let rec instantiate' = function
+  let memory = TypeHashtbl.create 0 in
+  let rec instantiate' (t : Type.t) : Type.t = Type.memo memory instantiate'' t
+  and instantiate'' = function
     | `Int -> `Int
     | `Bool -> `Bool
     | `Unit -> `Unit
-    | `Func (t1, t2) as f ->
+    | `Func (_, t1, t2) as f ->
         if Type.TypeVarSet.disjoint (Type.fv f) s.polys then f
-        else if t1 != t2 then `Func (instantiate' t1, instantiate' t2)
-        else
-          let t1' = instantiate' t1 in
-          `Func (t1', t1')
-    | `Tuple ts as tuple ->
+        else Type.func (instantiate' t1, instantiate' t2)
+    | `Tuple (_, ts) as tuple ->
         assert (List.length ts = 2);
         if Type.TypeVarSet.disjoint (Type.fv tuple) s.polys then tuple
-        else
-          List.fold_left
-            (fun acc t ->
-              match List.assq_opt t acc with
-              | Some t' -> (t, t') :: acc
-              | None -> (t, instantiate' t) :: acc)
-            [] ts
-          |> List.split |> snd |> List.rev
-          |> fun ts' -> `Tuple ts'
+        else Type.tuple (List.map instantiate' ts)
     | `TypeVar _ as alpha ->
         if Type.TypeVarSet.mem alpha s.polys then Hashtbl.find table alpha
         else alpha
   in
   instantiate' s.body
 
-let rec generalize (c : constraint_t list) =
+let unify : constraint_t list -> unit =
+ fun (cs : constraint_t list) ->
+  let rec unify' (tau, nu) =
+    (* Printf.printf "find(";
+       flush stdout; *)
+    let tau = UnionFind.find tau in
+    (* Printf.printf ")";
+       Printf.printf "represent(";
+       flush stdout; *)
+    let tau = tau |> UnionFind.represent in
+    (* Printf.printf ")";
+       Printf.printf "find(";
+       flush stdout; *)
+    let nu = UnionFind.find nu in
+    (* Printf.printf ")";
+       flush stdout;
+       Printf.printf "represent(";
+       flush stdout; *)
+    let nu = nu |> UnionFind.represent in
+    (* Printf.printf ")";
+       flush stdout; *)
+    match (tau, nu) with
+    | `Int, `Int | `Bool, `Bool | `Unit, `Unit -> ()
+    | `Func (_, a, b), `Func (_, a', b') ->
+        (* Printf.printf "unify'2("; *)
+        (* flush stdout; *)
+        unify' (a, a');
+        (* Printf.printf "\\unify'2)"; *)
+        (* flush stdout; *)
+        (* Printf.printf "unify'3("; *)
+        unify' (b, b')
+        (* Printf.printf "\\unify'3)"; *)
+        (* flush stdout *)
+    | `Tuple (_, ts), `Tuple (_, ts') ->
+        if List.length ts <> List.length ts' then
+          raise (BadConstraintError (tau, nu))
+        else List.iter2 (fun t t' -> unify' (t, t')) ts ts'
+    | c, (`TypeVar _ as alpha) | (`TypeVar _ as alpha), c ->
+        (* Printf.printf "merge(";
+           flush stdout; *)
+        UnionFind.merge alpha c
+    (* Printf.printf "\\merge)";
+       flush stdout *)
+    | _ -> raise (BadConstraintError (tau, nu))
+  in
+
+  let res =
+    (* Printf.printf "length=%d, " (List.length cs);
+       flush stdout; *)
+    cs |> List.rev
+    |> List.iter (fun c ->
+           (* Printf.printf "unify'iter(";
+              flush stdout; *)
+           unify' c
+           (* Printf.printf "\\unify'iter)\n";
+              flush stdout *))
+  in
+  res
+
+let string_of_constraints c =
+  c
+  |> List.map (fun (t1, t2) -> (Type.string_of t1, Type.string_of t2))
+  |> List.map (fun (s1, s2) -> Printf.sprintf "%s = %s" s1 s2)
+  |> String.concat "; " |> Printf.sprintf "[%s]"
+
+let generalize (c : constraint_t list) =
   unify c;
   fun (env : SchemaEnv.t) ->
     let env' = SchemaEnv.map UnionFind.apply_schema env in
     fun (t : Type.t) ->
+      (* Printf.printf "g-apply(";
+         Printf.printf "%d, %d" (Type.count t) (Type.count_all t);
+         Printf.printf ", t=%s " (Type.string_of t);
+         flush stdout; *)
       let typ = UnionFind.apply t in
-      assert (typ = UnionFind.apply typ);
+      (* Printf.printf ")";
+         flush stdout; *)
+      assert (Type.equal typ (UnionFind.apply typ));
       (* assert (Type.fv typ |> Type.TypeVarSet.is_empty |> not); *)
       (* assert (env'.fv |> Type.TypeVarSet.is_empty); *)
       let polys = Type.TypeVarSet.diff (Type.fv typ) env'.fv in
       let s = Schema.schema polys typ in
-      if Debug.debug_flag then (
+      if Options.debug_flag then (
+        Printf.printf "schema_env = %s\n" (Schema.string_of_senv env');
+        Printf.printf "constraints = %s\n" (string_of_constraints c);
         Printf.printf "father=%s\n" (UnionFind.string_of_father ());
         Printf.printf "t = %s\n" (Type.string_of t);
         Printf.printf "generalize %s to %s\n" (Type.string_of typ)
@@ -231,7 +233,7 @@ let rec generalize (c : constraint_t list) =
       (* assert (Type.TypeVarSet.is_empty polys |> not); *)
       s
 
-and infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
+let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
   match e with
   | `EConstInt _ -> (`Int, [])
   | `EConstBool _ -> (`Bool, [])
@@ -239,8 +241,12 @@ and infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
   | `EVar x -> (
       try
         let s = schema_env |> SchemaEnv.lookup x in
+        (* Printf.printf "instantiate(%s, " x;
+           flush stdout; *)
         let typ = s |> instantiate in
-        if Debug.debug_flag then
+        (* Printf.printf ")";
+           flush stdout; *)
+        if Options.debug_flag then
           Printf.printf "instantiate %s : %s to  %s\n" x
             (Schema.string_of_schema s)
             (Type.string_of typ);
@@ -250,34 +256,15 @@ and infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
       let t1, c1 = infer_expr schema_env e1 in
       let t2, c2 = infer_expr schema_env e2 in
       let t3, c3 = infer_expr schema_env e3 in
-      (t2, ((t2, t3) :: c3) @ c2 @ ((t1, `Bool) :: c1))
-  (* | `EBinaryOp (op, e1, e2) ->
-         let t1, c1 = infer_expr schema_env e1 in
-         (* assert (s1.polys = []); *)
-         let t2, c2 = infer_expr schema_env e2 in
-         (* assert (s2.polys = []); *)
-         let t, c = infer_binaryOp schema_env op t1 c1 t2 c2 in
-         (t, c)
-     | `EUnaryOp (_, e) ->
-         let t, c = infer_expr schema_env e in
-         (`Int, (t, `Int) :: c) *)
+      ( t2,
+        ((`Unit, `Unit) :: (t2, t3) :: (`Unit, `Unit) :: c3)
+        @ c2 @ ((t1, `Bool) :: c1) )
   | `EFun (_, var, body) ->
       let alpha = Type.new_typevar () in
       let s_alpha = Schema.schema Type.TypeVarSet.empty (alpha :> Type.t) in
       let env' = schema_env |> SchemaEnv.extend var s_alpha in
       let t, c = infer_expr env' body in
       (Type.func ((alpha :> Type.t), t), c)
-  (* | `EDFun (_, var, body) ->
-      let free_vars = Expr.free_vars e |> Expr.StringSet.elements in
-      let alphas =
-        Type.new_typevar () :: List.map (fun _ -> Type.new_typevar ()) free_vars
-      in
-      let s_alphas =
-        List.map (Schema.schema Type.TypeVarSet.empty) (alphas :> Type.t list)
-      in
-      let env' = schema_env |> SchemaEnv.extends (var :: free_vars) s_alphas in
-      let t, c = infer_expr env' body in
-      (Type.func ((List.hd alphas :> Type.t), t), c) *)
   | `ECall (e1, e2) ->
       let t1, c1 = infer_expr schema_env e1 in
       let t2, c2 = infer_expr schema_env e2 in
@@ -287,104 +274,57 @@ and infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
   | `ETuple es ->
       let ts, cs = List.map (infer_expr schema_env) es |> List.split in
       let ts' = ts and cs' = cs |> List.rev |> List.concat in
-      (`Tuple ts', cs')
+      (Type.tuple ts', cs')
   | `ELet ((names, e1s), e2) ->
       let ss =
         List.map
           (fun e ->
             let t, c = infer_expr schema_env e in
+            (* Printf.printf "generalize (";
+               flush stdout; *)
             let s = generalize c schema_env t in
+            (* Printf.printf ")";
+               flush stdout; *)
             s)
           e1s
       in
       let schema_env' = schema_env |> SchemaEnv.extends names ss in
       let t, c = infer_expr schema_env' e2 in
       (t, c)
-  (* let s1s, c1s = List.map (fun e -> let s, c, _=infer_expr schema_env env_monos e in s, c) e1s |> List.split in
-     let c1s' = List.rev c1s |> List.concat in
-     let schema_env' = schema_env |> Env.extends names s1s in
-     let s2, c2 = infer_expr schema_env' e2 in
-     (*assert (s2.polys=[]);*)
-     (s2, c2 @ c1s') *)
-  (* | `ELetRec (f, `EFun (_, x, e1), e2) -> *)
   | `ELetRec ((names, funcs), e2) ->
       let typevars =
         List.init (List.length names) (fun _ ->
             let alpha = Type.new_typevar () in
-            (* let beta = Type.new_typevar () in *)
             alpha)
       in
       let schemas : Schema.schema list =
         List.map
           (fun alpha ->
-            let polys = Type.TypeVarSet.singleton alpha
+            let polys = (*Type.TypeVarSet.singleton alpha *) Type.TypeVarSet.empty 
             and body :> Type.t = alpha in
             Schema.schema polys body)
           typevars
       in
       let schema_env' = schema_env |> SchemaEnv.extends names schemas in
-      let t1s, c1s = List.map (infer_expr schema_env') funcs |> List.split in
-      let c1s' = List.rev c1s |> List.concat in
-      let g = generalize c1s' schema_env' in
+      let t1s, c1s =
+        List.map (infer_expr schema_env') funcs
+        |> List.fold_left2
+             (fun (t1s, c1s) name (t, cs) ->
+               let cs' = 
+                 let t' = schema_env' |> SchemaEnv.lookup name |> instantiate in
+                 (t', t) :: cs 
+               in
+               (t :: t1s, cs' :: c1s))
+             ([], []) names
+      in
+      let t1s = t1s |> List.rev in
+      let c1s' = c1s |> List.concat in
+      let g = generalize c1s' schema_env in
       let s1s = t1s |> List.map (fun t -> g t) in
       (*assert (s1.polys=[]);*)
       let s2, c2 = infer_expr (schema_env |> SchemaEnv.extends names s1s) e2 in
       (*assert (s2.polys=[]);*)
       (s2, c2 @ c1s')
-(* let alpha = Type.new_typevar () in
-   let beta = Type.new_typevar () in
-   let s_x : Schema.schema_t =
-     { polys = []; monos = [ alpha ]; body = (alpha :> Type.t) }
-   and s_f : Schema.schema_t =
-     {
-       polys = [ alpha ];
-       monos = [ beta ];
-       body = `Func ((alpha :> Type.t), (beta :> Type.t));
-     }
-   in
-   let schema_env' = schema_env |> Env.extend x s_x |> Env.extend f s_f in
-   let s1, c1 = infer_expr schema_env' e1 in
-   (*assert (s1.polys=[]);*)
-   let s2, c2 = infer_expr (schema_env |> Env.extend f s_f) e2 in
-   (*assert (s2.polys=[]);*)
-   (s2, ((s1.body, (beta :> Type.t)) :: c2) @ c1) *)
-
-(* (alpha_i, t_i) (i=0, 1, ... , n-1) maintains a property that forall i, alpha_i does not occur in t_j for all j. *)
-and unify : constraint_t list -> unit =
- (* let rec compose (alpha, t) (g : Type.t Substitutes.t) : Type.t Substitutes.t
-        =
-      let apply (alpha, t) ((beta, t') : subst_t) : subst_t =
-        (beta, Type.subst t' alpha t)
-      in
-      match g with
-      | [] -> [ (alpha, t) ]
-      | (beta, ((`Int | `Bool | `Func _) as u)) :: g' ->
-          (beta, u) :: compose (apply (beta, u) f) (List.map (apply (beta, u)) g')
-      | (beta, (`TypeVar _ as gamma)) :: g' ->
-          if alpha = gamma then
-            apply (beta, gamma) (beta, t) :: compose (apply (beta, gamma) f) g'
-          else if beta = gamma then
-            (beta, gamma) :: compose (apply (beta, gamma) f) g'
-          else (beta, gamma) :: compose (apply (beta, gamma) f) g'
-    in *)
- fun (cs : constraint_t list) ->
-  let rec unify' (tau, nu) =
-    let tau = UnionFind.find tau |> UnionFind.represent
-    and nu = UnionFind.find nu |> UnionFind.represent in
-    match (tau, nu) with
-    | `Int, `Int | `Bool, `Bool | `Unit, `Unit -> ()
-    | `Func (a, b), `Func (a', b') ->
-        unify' (a, a');
-        unify' (b, b')
-    | `Tuple ts, `Tuple ts' ->
-        if List.length ts <> List.length ts' then
-          raise (BadConstraintError (tau, nu))
-        else List.iter2 (fun t t' -> unify' (t, t')) ts ts'
-    | c, (`TypeVar _ as alpha) | (`TypeVar _ as alpha), c ->
-        UnionFind.merge alpha c
-    | _ -> raise (BadConstraintError (tau, nu))
-  in
-  cs |> List.iter unify'
 
 (* match cs with
     | (`Int, `Int) :: cs' | (`Bool, `Bool) :: cs' | (`Unit, `Unit) :: cs' ->
@@ -413,30 +353,34 @@ and unify : constraint_t list -> unit =
              substs' |> Substitutes.add alpha t)
    | (t1, t2) :: _ -> raise (BadConstraintError (t1, t2)) *)
 
-let string_of_constraints c =
-  c
-  |> List.map (fun (t1, t2) -> (Type.string_of t1, Type.string_of t2))
-  |> List.map (fun (s1, s2) -> Printf.sprintf "%s = %s" s1 s2)
-  |> String.concat "; " |> Printf.sprintf "[%s]"
-
 let infer_cexp env (e : Expr.t) =
   let (t : Type.t), (c : constraint_t list) = infer_expr env e in
+  (* Printf.printf "infer_cexp-unify(";
+     flush stdout; *)
   unify c;
-  if Debug.debug_flag then (
+  (* Printf.printf "\\infer_cexp-unify)";
+     flush stdout; *)
+  if Options.debug_flag then (
     Printf.printf "in infer_cexp (e: %s): \n" (Expr.string_of_expr e);
     Printf.printf "type=%s\n" (Type.string_of t);
     Printf.printf "constraints=%s\n" (string_of_constraints c);
     Printf.printf "father=%s\n" UnionFind.(string_of_father ())
     (*Printf.printf "subst=[%s]\n" (Substs.Substitutes.string_of substs)*));
+  (* Printf.printf "apply(";
+     flush stdout; *)
   let t' = UnionFind.apply t in
-  (try assert (UnionFind.apply t' = t')
-   with e ->
-     Printf.printf "t' = %s\n" (Type.string_of t');
-     Printf.printf "apply t' = %s\n" (Type.string_of (UnionFind.apply t'));
-     Printf.printf "apply t' = %s\n" (Type.string_of (UnionFind.apply t' |> UnionFind.apply));
-     raise e);
-
+  (* Printf.printf "\\apply)"; *)
+  (* flush stdout; *)
+  (* (try assert (UnionFind.apply t' == t')
+     with e ->
+       Printf.printf "t' = %s\n" (Type.string_of t');
+       Printf.printf "apply t' = %s\n" (Type.string_of (UnionFind.apply t'));
+       Printf.printf "apply t' = %s\n"
+         (Type.string_of (UnionFind.apply t' |> UnionFind.apply));
+       raise e); *)
+  (* Printf.printf "map-apply_schema(";flush stdout; *)
   let env' = SchemaEnv.map UnionFind.apply_schema env in
+  (* Printf.printf "\\map-apply_schema)";flush stdout; *)
   (t', env')
 
 let infer_command (env : SchemaEnv.t) (cmd : Expr.t Command.command) :
@@ -444,13 +388,14 @@ let infer_command (env : SchemaEnv.t) (cmd : Expr.t Command.command) :
   match cmd with
   | CExp e ->
       let t, env = infer_cexp env e in
+      (* Printf.printf "out of infer_cexp\n";flush stdout; *)
       ([ Schema.schema Type.TypeVarSet.empty t ], env)
   | CDecls (names, exprs) ->
       let ss =
         exprs
         |> List.map (fun e ->
                let t, c = infer_expr env e in
-               if Debug.debug_flag then (
+               if Options.debug_flag then (
                  Printf.printf "in infer_command (e: %s): \n"
                    (Expr.string_of_expr e);
                  Printf.printf "type=%s\n" (Type.string_of t);
@@ -470,14 +415,24 @@ let infer_command (env : SchemaEnv.t) (cmd : Expr.t Command.command) :
       let schemas : Schema.schema list =
         List.map
           (fun alpha ->
-            let polys = Type.TypeVarSet.singleton alpha
+            let polys =
+              (*Type.TypeVarSet.singleton alpha*) Type.TypeVarSet.empty
             and body :> Type.t = alpha in
             Schema.schema polys body)
           typevars
       in
       let schema_env' = env |> SchemaEnv.extends names schemas in
-      let t1s, c1s = List.map (infer_expr schema_env') es |> List.split in
-      let c1s' = List.rev c1s |> List.concat in
-      let g = generalize c1s' schema_env' in
+      let t1s, c1s = List.map (infer_expr schema_env') es
+      |> List.fold_left2
+           (fun (t1s, c1s) name (t, cs) ->
+             let cs' = 
+               let t' = schema_env' |> SchemaEnv.lookup name |> instantiate in
+               (t', t) :: cs
+             in
+             (t :: t1s, cs' :: c1s))
+           ([], []) names in
+      let t1s = List.rev t1s in
+      let c1s' = c1s |> List.concat in
+      let g = generalize c1s' env in
       let s1s = t1s |> List.map (fun t -> g t) in
       (s1s, env |> SchemaEnv.extends names s1s)

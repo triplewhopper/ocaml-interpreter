@@ -2,11 +2,9 @@ type value =
   | VInt of int
   | VBool of bool
   | VUnit
-  | VTuple of value list 
+  | VTuple of value list
   | VFunc of string * Expr.t * value option ref Env.t ref
-  (* | VRecFun of string * [ `EFun of int * string * expr ] * value Env.t *)
   | VBuiltinFun of string * (value -> value)
- (* | VDFun of string * Expr.t  (** value option ref Env.t ref *) *)
 
 let rec string_of_value (v : value) : string =
   match v with
@@ -14,19 +12,16 @@ let rec string_of_value (v : value) : string =
   | VBool b -> string_of_bool b
   | VUnit -> "()"
   | VTuple vs ->
-      "("
-      ^ (vs |> List.map string_of_value |> String.concat ", ")
-      ^ ")"
+      "(" ^ (vs |> List.map string_of_value |> String.concat ", ") ^ ")"
   | VFunc (var, _, _) -> Printf.sprintf "<fun (%s)>" var
   | VBuiltinFun (name, _) -> Printf.sprintf "<built-in %s>" name
-  (* | VDFun (name, body) ->
-      Printf.sprintf "<dfun %s, [%s]>" name
-        (Expr.free_vars body |> Expr.StringSet.remove name
-       |> Expr.StringSet.elements |> String.concat ", ") *)
+
 
 exception TypeError of string
+
 let rec equal = function
-  | (VFunc _ | (*VDFun _ |*) VBuiltinFun _), (VFunc _ | (*VDFun _ |*) VBuiltinFun _) ->
+  | ( (VFunc _ | VBuiltinFun _),
+      (VFunc _ | VBuiltinFun _) ) ->
       raise (Invalid_argument "compare: functional value")
   | VInt x, VInt y -> VBool (x = y)
   | VBool x, VBool y -> VBool (x = y)
@@ -35,9 +30,7 @@ let rec equal = function
       VBool
         (List.length xs = List.length ys
         && List.for_all2 (fun x y -> equal (x, y) = VBool true) xs ys)
-  | x, y -> raise (TypeError ((string_of_value x) ^ " = " ^ (string_of_value y)))
-
-
+  | x, y -> raise (TypeError (string_of_value x ^ " = " ^ string_of_value y))
 
 let builtins =
   let wrapper op f = (op, VBuiltinFun (op, f)) in
@@ -80,6 +73,12 @@ let builtins =
     wrapper2 "||" (function
       | VBool x', VBool y' -> VBool (x' || y')
       | x, y -> raise (TypeError (sv x ^ " || " ^ sv y)));
+    wrapper "fst" (function
+      | VTuple [ x'; _ ] -> x'
+      | x -> raise (TypeError ("fst " ^ sv x)));
+    wrapper "snd" (function
+      | VTuple [ _; y' ] -> y'
+      | x -> raise (TypeError ("snd " ^ sv x)));
     wrapper "~-" (function
       | VInt x' -> VInt (-x')
       | x -> raise (TypeError ("-" ^ sv x)));
@@ -110,20 +109,29 @@ let initial_env =
 
 let initial_schema_env =
   let open Schema in
-  let iii =
-    schema TypeVarSet.empty (Type.func (`Int, Type.func (`Int, `Int)))
+  let wrapper2 vars x y z =
+    schema (TypeVarSet.of_list vars)
+      (Type.func ((x :> Type.t), Type.func ((y :> Type.t), (z :> Type.t))))
   in
-  let iib =
-    schema TypeVarSet.empty (Type.func (`Int, Type.func (`Int, `Bool)))
+  let wrapper vars x y =
+    schema (TypeVarSet.of_list vars) (Type.func ((x :> Type.t), (y :> Type.t)))
   in
-  let bbb =
-    schema TypeVarSet.empty (Type.func (`Bool, Type.func (`Bool, `Bool)))
+  let iii = wrapper2 [] `Int `Int `Int in
+  let iib = wrapper2 [] `Int `Int `Bool in
+  let bbb = wrapper2 [] `Bool `Bool `Bool in
+  let aa_bool =
+    let alpha = Type.new_typevar () in
+    wrapper2 [ alpha ] (alpha :> Type.t) (alpha :> Type.t) `Bool
   in
-  let alpha = Type.new_typevar () in
-  let aab =
-    schema
-      (TypeVarSet.singleton alpha)
-      (Type.func ((alpha :> Type.t), Type.func ((alpha :> Type.t), `Bool)))
+  let fst =
+    let alpha = Type.new_typevar () in
+    let beta = Type.new_typevar () in
+    wrapper [ alpha; beta ] (Type.tuple ([ alpha; beta ] :> Type.t list)) alpha
+  in
+  let snd =
+    let alpha = Type.new_typevar () in
+    let beta = Type.new_typevar () in
+    wrapper [ alpha; beta ] (Type.tuple ([ alpha; beta ] :> Type.t list)) beta
   in
   SchemaEnv.empty |> SchemaEnv.extend "+" iii |> SchemaEnv.extend "-" iii
   |> SchemaEnv.extend "*" iii |> SchemaEnv.extend "/" iii
@@ -131,12 +139,11 @@ let initial_schema_env =
   |> SchemaEnv.extend "<" iib |> SchemaEnv.extend ">=" iib
   |> SchemaEnv.extend "<=" iib |> SchemaEnv.extend "&&" bbb
   |> SchemaEnv.extend "||" bbb
-  |> SchemaEnv.extend "~-" (schema TypeVarSet.empty (Type.func (`Int, `Int)))
-  |> SchemaEnv.extend "~+" (schema TypeVarSet.empty (Type.func (`Int, `Int)))
-  |> SchemaEnv.extend "=" aab
-  |> SchemaEnv.extend "print_int"
-       (schema TypeVarSet.empty (Type.func (`Int, `Unit)))
-  |> SchemaEnv.extend "print_bool"
-       (schema TypeVarSet.empty (Type.func (`Bool, `Unit)))
-  |> SchemaEnv.extend "print_newline"
-       (schema TypeVarSet.empty (Type.func (`Unit, `Unit)))
+  |> SchemaEnv.extend "~-" (wrapper [] `Int `Int)
+  |> SchemaEnv.extend "~+" (wrapper [] `Int `Int)
+  |> SchemaEnv.extend "=" aa_bool
+  |> SchemaEnv.extend "fst" fst |> SchemaEnv.extend "snd" snd
+  |> SchemaEnv.extend "print_int" (wrapper [] `Int `Unit)
+  |> SchemaEnv.extend "print_bool" (wrapper [] `Bool `Unit)
+  |> SchemaEnv.extend "print_newline" (wrapper [] `Unit `Unit)
+
