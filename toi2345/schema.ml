@@ -5,6 +5,13 @@ type schema = { polys : TypeVarSet.t; fv : TypeVarSet.t; body : Type.t }
 let schema polys body =
   { polys; fv = TypeVarSet.diff (Type.fv body) polys; body }
 
+let from_monomorphic_typevar x =
+  {
+    polys = TypeVarSet.empty;
+    fv = TypeVarSet.singleton x;
+    body = (x :> Type.t);
+  }
+
 module SchemaEnv = struct
   type t = { env : schema Env.t; fv : Type.TypeVarSet.t }
   type elt = schema
@@ -44,17 +51,6 @@ let string_of_schema : schema -> string = function
         else string_of_list (TypeVarSet.elements polys)
       in
       Printf.sprintf "%s%s" s_polys (Type.string_of body)
-
-(* let string_of_schema_debug : schema -> string = function
-  | { polys; fv; body } ->
-      let string_of_list xs =
-        List.map Type.string_of (xs :> Type.t list)
-        |> String.concat "; " |> Printf.sprintf "[%s]"
-      in
-      let s_polys = string_of_list (TypeVarSet.elements polys) in
-      Printf.sprintf "{polys=%s; fv=%s; body=%s}" s_polys
-        (string_of_list (TypeVarSet.elements fv))
-        (Type.string_of body) *)
 
 let string_of_senv (env : SchemaEnv.t) =
   Printf.sprintf "(fv:[%s]) {%s}"

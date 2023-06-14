@@ -6,7 +6,8 @@ module TypeHashtbl = Type.TypeHashtbl
 exception RecursiveOccurenceError of Type.typevar_t * Type.t
 exception BadConstraintError of Type.t * Type.t
 
-let ( = ) : int -> int -> bool = ( = )
+let ( = ) : int -> int -> bool =
+  ( = ) (* prevent from using `=' between Type.t values *)
 
 module UnionFind : sig
   val find : Type.t -> Type.t
@@ -15,34 +16,54 @@ module UnionFind : sig
   val apply : Type.t -> Type.t
   val apply_schema : Schema.schema -> Schema.schema
   val string_of_father : unit -> string
+  val backup : unit -> unit
+  val restore : unit -> unit
 end = struct
-  let father : Type.t TypeHashtbl.t = TypeHashtbl.create 0
-  let rk : int TypeHashtbl.t = TypeHashtbl.create 0
-  let representative : Type.t TypeHashtbl.t = TypeHashtbl.create 0
+  let father : Type.t TypeHashtbl.t ref = ref (TypeHashtbl.create 0)
+  let rk : int TypeHashtbl.t ref = ref (TypeHashtbl.create 0)
+  let representative : Type.t TypeHashtbl.t ref = ref (TypeHashtbl.create 0)
+  let father_backup = ref None
+  let rk_backup = ref None
+  let representative_backup = ref None
+
+  let backup () =
+    father_backup := Some (TypeHashtbl.copy !father);
+    rk_backup := Some (TypeHashtbl.copy !rk);
+    representative_backup := Some (TypeHashtbl.copy !representative)
+
+  let restore () =
+    father := Option.get !father_backup;
+    rk := Option.get !rk_backup;
+    representative := Option.get !representative_backup;
+    father_backup := None;
+    rk_backup := None;
+    representative_backup := None
 
   let rank x =
-    match TypeHashtbl.find_opt rk x with
+    match TypeHashtbl.find_opt !rk x with
     | Some r -> r
     | None ->
-        TypeHashtbl.add rk x 0;
+        TypeHashtbl.add !rk x 0;
         0
 
   let rec find x =
-    match TypeHashtbl.find_opt father x with
+    match TypeHashtbl.find_opt !father x with
     | Some x' ->
         if Type.equal x x' then x
         else
           let f' = find x' in
-          TypeHashtbl.replace father x f';
+          TypeHashtbl.replace !father x f';
           f'
     | None ->
-        TypeHashtbl.add father x x;
-        if not (Type.is_typevar x) then TypeHashtbl.add representative x x;
+        TypeHashtbl.add !father x x;
+        if not (Type.is_typevar x) then TypeHashtbl.add !representative x x;
         x
 
   let represent x =
     let f = find x in
-    match TypeHashtbl.find_opt representative f with Some x' -> x' | None -> f
+    match TypeHashtbl.find_opt !representative f with
+    | Some x' -> x'
+    | None -> f
 
   let apply t =
     let table = TypeHashtbl.create 0 in
@@ -94,18 +115,18 @@ end = struct
   let merge x1 x2 =
     let f1, f2 = (find x1, find x2) in
     if not (Type.equal f1 f2) then (
-      if not (Type.is_typevar f1) then TypeHashtbl.replace representative f2 f1;
-      if not (Type.is_typevar f2) then TypeHashtbl.replace representative f1 f2;
+      if not (Type.is_typevar f1) then TypeHashtbl.replace !representative f2 f1;
+      if not (Type.is_typevar f2) then TypeHashtbl.replace !representative f1 f2;
       let c = rank f1 - rank f2 in
-      if c > 0 then TypeHashtbl.replace father f2 f1
-      else TypeHashtbl.replace father f1 f2;
+      if c > 0 then TypeHashtbl.replace !father f2 f1
+      else TypeHashtbl.replace !father f1 f2;
       if c = 0 then
-        let rk_f2 = TypeHashtbl.find rk f2 in
-        TypeHashtbl.replace rk f2 (rk_f2 + 1))
+        let rk_f2 = TypeHashtbl.find !rk f2 in
+        TypeHashtbl.replace !rk f2 (rk_f2 + 1))
 
   let string_of_father () =
     let groups = TypeHashtbl.create 0 in
-    father |> TypeHashtbl.to_seq_keys
+    !father |> TypeHashtbl.to_seq_keys
     |> Seq.iter (fun alpha ->
            match TypeHashtbl.find_opt groups (find alpha) with
            | Some vs -> vs := alpha :: !vs
@@ -261,7 +282,7 @@ let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
         @ c2 @ ((t1, `Bool) :: c1) )
   | `EFun (_, var, body) ->
       let alpha = Type.new_typevar () in
-      let s_alpha = Schema.schema Type.TypeVarSet.empty (alpha :> Type.t) in
+      let s_alpha = Schema.from_monomorphic_typevar alpha in
       let env' = schema_env |> SchemaEnv.extend var s_alpha in
       let t, c = infer_expr env' body in
       (Type.func ((alpha :> Type.t), t), c)
@@ -292,27 +313,18 @@ let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
       let t, c = infer_expr schema_env' e2 in
       (t, c)
   | `ELetRec ((names, funcs), e2) ->
-      let typevars =
-        List.init (List.length names) (fun _ ->
-            let alpha = Type.new_typevar () in
-            alpha)
-      in
       let schemas : Schema.schema list =
-        List.map
-          (fun alpha ->
-            let polys = (*Type.TypeVarSet.singleton alpha *) Type.TypeVarSet.empty 
-            and body :> Type.t = alpha in
-            Schema.schema polys body)
-          typevars
+        List.init (List.length names) (fun _ -> Type.new_typevar ())
+        |> List.map Schema.from_monomorphic_typevar
       in
       let schema_env' = schema_env |> SchemaEnv.extends names schemas in
       let t1s, c1s =
         List.map (infer_expr schema_env') funcs
         |> List.fold_left2
              (fun (t1s, c1s) name (t, cs) ->
-               let cs' = 
+               let cs' =
                  let t' = schema_env' |> SchemaEnv.lookup name |> instantiate in
-                 (t', t) :: cs 
+                 (t', t) :: cs
                in
                (t :: t1s, cs' :: c1s))
              ([], []) names
@@ -321,9 +333,7 @@ let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
       let c1s' = c1s |> List.concat in
       let g = generalize c1s' schema_env in
       let s1s = t1s |> List.map (fun t -> g t) in
-      (*assert (s1.polys=[]);*)
       let s2, c2 = infer_expr (schema_env |> SchemaEnv.extends names s1s) e2 in
-      (*assert (s2.polys=[]);*)
       (s2, c2 @ c1s')
 
 (* match cs with
@@ -355,19 +365,12 @@ let rec infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
 
 let infer_cexp env (e : Expr.t) =
   let (t : Type.t), (c : constraint_t list) = infer_expr env e in
-  (* Printf.printf "infer_cexp-unify(";
-     flush stdout; *)
   unify c;
-  (* Printf.printf "\\infer_cexp-unify)";
-     flush stdout; *)
   if Options.debug_flag then (
     Printf.printf "in infer_cexp (e: %s): \n" (Expr.string_of_expr e);
     Printf.printf "type=%s\n" (Type.string_of t);
     Printf.printf "constraints=%s\n" (string_of_constraints c);
-    Printf.printf "father=%s\n" UnionFind.(string_of_father ())
-    (*Printf.printf "subst=[%s]\n" (Substs.Substitutes.string_of substs)*));
-  (* Printf.printf "apply(";
-     flush stdout; *)
+    Printf.printf "father=%s\n" UnionFind.(string_of_father ()));
   let t' = UnionFind.apply t in
   (* Printf.printf "\\apply)"; *)
   (* flush stdout; *)
@@ -383,12 +386,11 @@ let infer_cexp env (e : Expr.t) =
   (* Printf.printf "\\map-apply_schema)";flush stdout; *)
   (t', env')
 
-let infer_command (env : SchemaEnv.t) (cmd : Expr.t Command.command) :
+let infer_command' (env : SchemaEnv.t) (cmd : Expr.t Command.command) :
     Schema.schema list * SchemaEnv.t =
   match cmd with
   | CExp e ->
       let t, env = infer_cexp env e in
-      (* Printf.printf "out of infer_cexp\n";flush stdout; *)
       ([ Schema.schema Type.TypeVarSet.empty t ], env)
   | CDecls (names, exprs) ->
       let ss =
@@ -407,32 +409,32 @@ let infer_command (env : SchemaEnv.t) (cmd : Expr.t Command.command) :
       let env' = env |> SchemaEnv.extends names ss in
       (ss, env')
   | CRecDecls (names, es) ->
-      let typevars =
-        List.init (List.length names) (fun _ ->
-            let alpha = Type.new_typevar () in
-            alpha)
-      in
       let schemas : Schema.schema list =
-        List.map
-          (fun alpha ->
-            let polys =
-              (*Type.TypeVarSet.singleton alpha*) Type.TypeVarSet.empty
-            and body :> Type.t = alpha in
-            Schema.schema polys body)
-          typevars
+        List.init (List.length names) (fun _ -> Type.new_typevar ())
+        |> List.map Schema.from_monomorphic_typevar
       in
       let schema_env' = env |> SchemaEnv.extends names schemas in
-      let t1s, c1s = List.map (infer_expr schema_env') es
-      |> List.fold_left2
-           (fun (t1s, c1s) name (t, cs) ->
-             let cs' = 
-               let t' = schema_env' |> SchemaEnv.lookup name |> instantiate in
-               (t', t) :: cs
-             in
-             (t :: t1s, cs' :: c1s))
-           ([], []) names in
+      let t1s, c1s =
+        List.map (infer_expr schema_env') es
+        |> List.fold_left2
+             (fun (t1s, c1s) name (t, cs) ->
+               let cs' =
+                 let t' = schema_env' |> SchemaEnv.lookup name |> instantiate in
+                 (t', t) :: cs
+               in
+               (t :: t1s, cs' :: c1s))
+             ([], []) names
+      in
       let t1s = List.rev t1s in
       let c1s' = c1s |> List.concat in
       let g = generalize c1s' env in
       let s1s = t1s |> List.map (fun t -> g t) in
       (s1s, env |> SchemaEnv.extends names s1s)
+
+let infer_command (env : SchemaEnv.t) (cmd : Expr.t Command.command) :
+    Schema.schema list * SchemaEnv.t =
+  UnionFind.backup ();
+  try infer_command' env cmd
+  with e ->
+    UnionFind.restore ();
+    raise e

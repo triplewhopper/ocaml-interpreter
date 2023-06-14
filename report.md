@@ -149,6 +149,8 @@ module UnionFind: sig
   val apply : Type.t -> Type.t
   val apply_schema : Schema.schema -> Schema.schema
   val string_of_father : unit -> string
+  val backup : unit -> unit
+  val restore : unit -> unit
 end
 ```
 Path compressionとunion by rankという二つの最適化方法を使うと`find`と`merge`は$O(\alpha(n))$の計算量で済ませる. 
@@ -172,7 +174,8 @@ Path compressionとunion by rankという二つの最適化方法を使うと`fi
           let t = represent beta in
           if not (Type.equal beta t) then 
             if beta |> Type.occurs_in t then
-              raise (RecursiveOccurenceError (beta, t))
+              raise (RecursiveOccurenceError (beta, t)) 
+              (* triggers UnionFind.restore () *)
             else apply' t
           else t
     in
@@ -308,6 +311,10 @@ let rec unify (cs : constraint_t list): unit =
 型代入を型に適用する時（`UnionFind.apply t`）に先伸ばされた. 
 単一化に成功すれば, `UnionFind.apply t`で`t`の中に出現する型変数をできるだけ具体的な型に置き換えることができる. 
 
+#### Error handling
+`infer_command`で`UnioinFind.backup ()`とあらかじめバックアップして、
+例外が発生した場合は（例えば`BadConstraintError _`と`RecursiveOccurenceError _`)`UnionFind.restore ()`でロールバックする.
+
 ### toi5
 型スキーマの定義は`schmea.ml`にあり
 ```ocaml
@@ -347,7 +354,7 @@ let infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
 ```ocaml
   | `EFun (_, var, body) ->
       let alpha = Type.new_typevar () in
-      let s_alpha = Schema.schema Type.TypeVarSet.empty (alpha :> Type.t) in
+      let s_alpha = Schema.from_monomorphic_typevar alpha in
       let env' = schema_env |> SchemaEnv.extend var s_alpha in
       let t, c = infer_expr env' body in
       (Type.func ((alpha :> Type.t), t), c)
@@ -370,8 +377,9 @@ let infer_expr (schema_env : SchemaEnv.t) e : Type.t * constraint_t list =
       (t, c)
 ```
 `ELetRec((names, funcs), e2)`はいくつか注意点がある. 
-まずは`names`$=[name_1; name_2; \cdots; name_n]$の要素それぞれに対して単相的な型スキーマ$\forall \emptyset.\alpha_i$を生成する. 
-つまりPolymorphic recursionをサポートしていない.
+まずは`names`$=[name_1; name_2; \cdots; name_n]$の要素それぞれに対して（実質単相的な）型スキーマ$\forall \emptyset.\alpha_i$を生成する. 
+つまりPolymorphic recursionを公式的にはサポートしていない.
+*（特殊な書き方をすればできるが utopでは受け付けられないが）*
 これで型スキーマのリスト`schemas`を得る. 
 これらの型スキーマを入れた環境`schema_env'`で`funcs`の要素それぞれに対して型推論を行なって, 型のリストと型制限のリストのペア$(t, cs)$のリスト$[(t_1, cs_1); (t_2, cs_2);\cdots;(t_n, cs_n)]$を得る. 
 
@@ -389,22 +397,18 @@ $cs_i$の先頭に
 
 ```ocaml
   | `ELetRec ((names, funcs), e2) ->
-      let typevars =
-        List.init (List.length names) (fun _ ->
-            let alpha = Type.new_typevar () in
-            alpha)
-      in
       let schemas : Schema.schema list =
-        List.map (Schema.schema Type.TypeVarSet.empty) (typevars :> Type.t list)
+        List.init (List.length names) (fun _ -> Type.new_typevar ())
+        |> List.map Schema.from_monomorphic_typevar
       in
       let schema_env' = schema_env |> SchemaEnv.extends names schemas in
       let t1s, c1s =
         List.map (infer_expr schema_env') funcs
         |> List.fold_left2
              (fun (t1s, c1s) name (t, cs) ->
-               let cs' = 
+               let cs' =
                  let t' = schema_env' |> SchemaEnv.lookup name |> instantiate in
-                 (t', t) :: cs 
+                 (t', t) :: cs
                in
                (t :: t1s, cs' :: c1s))
              ([], []) names
@@ -543,16 +547,19 @@ val fact: int -> int = <fun (x)>
 # let compose f g x = f (g x);;
 val compose: '75 '76 '77. ('76 -> '77) -> ('75 -> '76) -> '75 -> '77 = <fun (f)>
 
-# let rec power f n = 
-    if n = 0 then fun x -> x 
-    else compose f (power f (n - 1));;
-val power: '84. ('84 -> '84) -> int -> '84 -> '84 = <fun (f)>
+# let rec repeat n f x = 
+  if n = 0 then x else f (repeat (n - 1) f x);;
+val repeat: '97. int -> ('97 -> '97) -> '97 -> '97 = <fun (n)>
+
+# (repeat 100 (fun x -> x + 1) 1),
+   repeat 100 (fun x -> if x then false else true) false;;
+- : int * bool = (101, false)
 
 # let zero s z = z;;
-val zero: '94 '95. '94 -> '95 -> '95 = <fun (s)>
+val zero: '103 '104. '103 -> '104 -> '104 = <fun (s)>
 
 # let succ n f x = f (n f x);;
-val succ: '98 '100 '101. (('100 -> '101) -> '98 -> '100) -> ('100 -> '101) -> '98 -> '101 = <fun (n)>
+val succ: '107 '109 '110. (('109 -> '110) -> '107 -> '109) -> ('109 -> '110) -> '107 -> '110 = <fun (n)>
 
 # let mult m n f x = m (n f) x;; 
 val mult: '104 '105 '106 '108. ('106 -> '105 -> '108) -> ('104 -> '106) -> '104 -> '105 -> '108 = <fun (m)>
@@ -563,9 +570,36 @@ val make: '115. int -> ('115 -> '115) -> '115 -> '115 = <fun (n)>
 # make 10 (fun x -> x + 1) 0;;
 - : int = 10
 
+# make 10 (fun p -> (fst p + 1, snd p - 1)) (0, 0);;
+- : int * int = (10, -10)
+
 # mult (make 6) (make 15) (fun x -> x+1) 0;;
 - : int = 90
 ```
+一方,
+```ocaml
+# let rec f n x = 
+    if n = 0 then 0 
+    else if n mod 2 = 0 then f (n-1) true 
+    else f (n-1) 2;;
+Error: Cannot unify bool and int
+
+# let rec f n x = 
+    let f' x = f (n-1) x in
+      if n = 0 then 0 
+      else if n mod 2 = 0 then f' true 
+      else f' 2;;
+val f: '8. int -> '8 -> int = <fun (n)>
+```
+そういうことができてしまうのはValue restrictionの実装はしていないからと考えられる.
+```ocaml
+# let id = (fun x-> x)(fun x->x) in (id 1, id true);;
+- : int * bool = (1, true)
+```
+というような書き方はocamlでは非合法であるが
+今までmutable datatypeを実装していないので
+返り値の位置上の型変数のgeneralizeは大丈夫であろう.
+
 ### hatten1
 型代入の適用が必ず止まることを保証するためである. 
 (UnionFindを使った単一化は出現検査をしないので単一化は必ず停止する)
