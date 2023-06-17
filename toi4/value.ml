@@ -5,19 +5,13 @@ type value =
   | `VTuple of thunk list
   | `VList of thunk list
   | `VCons of thunk * thunk
-  | `VFunc of string * Expr.t * thunk option ref Env.t ref
+  | `VFunc of string * Expr.t * thunk option ref Env.t
   | `VBuiltinFun of string * (thunk -> value) ]
 
 and thunk =
   | Thunk of Expr.t * thunk option ref Env.t
   | BuiltinFunction of [ `VBuiltinFun of string * (thunk -> value) ]
 
-type zombie = |
-and _ now = Human : 'a * ('a -> 'b) -> 'b now | Zombie : 'a -> zombie now
-
-let infect (type a) : a now -> zombie now = function
-  | Human (a, f) -> Zombie (f a)
-  | Zombie a -> Zombie a
 
 let string_of_thunk = function
   | Thunk (e, _) -> "<thunk " ^ Expr.string_of_expr e ^ ">"

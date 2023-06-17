@@ -1,8 +1,27 @@
-### toi1
 ### ビルド方法
-```
+```zsh
+$ cd 09-231017
+$ ls
+common       dune-project hatten1      report.md    toi123       toi4
 
+$ ls toi123/*.exe toi4/*.exe hatten1/*.exe
+zsh: no matches found: toi123/*.exe
+
+$ dune build
+File "common/dune", line 10, characters 0-26:
+10 | (menhir
+11 |  (modules parser))
+Error: No rule found for common/parser.mly
+File "common/dune", line 7, characters 0-27:
+7 | (ocamllex
+8 |  (modules lexer))
+Error: No rule found for common/lexer.mll
+
+$ ls toi123/*.exe toi4/*.exe hatten1/*.exe
+hatten1/main.exe toi123/main.exe  toi4/main.exe
 ```
+### toi1
+
 #### `toi23/expr.ml`
 新たに
 ```ocaml
@@ -537,7 +556,7 @@ type value =
   | `VTuple of thunk list
   | `VList of thunk list
   | `VCons of thunk * thunk
-  | `VFunc of string * Expr.t * thunk option ref Env.t ref
+  | `VFunc of string * Expr.t * thunk option ref Env.t
   | `VBuiltinFun of string * (thunk -> value) ]
 
 and thunk =
@@ -602,7 +621,7 @@ and eval_expr (env : thunk option ref Env.t) (e : expr) : value =
       match v1 with
       | `VFunc (x, e', oenv) ->
           let r = Value.Thunk (e2, env) |> Option.some |> ref in
-          eval_expr (!oenv |> Env.extend x r) e'
+          eval_expr (oenv |> Env.extend x r) e'
       | `VBuiltinFun (_, f) -> f (Thunk (e2, env))
       | v -> raise (NotCallable v))
 ```
@@ -797,3 +816,74 @@ val naturals: int list = <thunk x0> :: <thunk range_from ((+) x0 1)>
 ```
 
 ### hatten1
+toi4の`eval_thunk`を`eval_dval`に変更する
+```ocaml
+let depth = ref 0
+
+let rec eval_dval (d : dval) : value =
+  depth := !depth + 1;
+  let v =
+    match d with
+    | DThunk (e, env) ->
+        let res = eval_expr env e in
+        Printf.printf "%*seval_dthunk: %s = %s\n" (!depth * 2) ""
+          (Value.string_of_dval d)
+          (Value.string_of_value res);
+        res
+    | DVal v -> v
+  in
+  depth := !depth - 1;
+  v
+
+```
+`eval_expr`の`EVar x`のところに
+```ocaml
+  | `EVar x -> (
+      try
+        match Env.lookup x env with
+        (* | {contents=Some (DVal v)} -> v *)
+        | {contents=Some dval} as r -> 
+          let v = eval_dval dval in r := Some (DVal v); v
+        | {contents=None} -> raise (Transform.InvalidLetRecRhs (`EVar x))
+      with Not_found -> raise (Transform.UnboundVariable x))
+```
+すると
+
+```ocaml
+# (fun x -> (fun y -> x * y) x) (2+3);;
+          eval_dval: <DThunk 3> = 3
+          eval_dval: <DThunk 2> = 2
+        eval_dval: <DThunk (+) 2 3> = 5
+      eval_dval: <DThunk x> = 5
+    eval_dval: <DThunk y> = 5
+    eval_dval: <DThunk x> = 5
+  eval_dval: <DThunk (fun#2 x -> (fun#1 y -> ( * ) x y) x) ((+) 2 3)> = 25
+- : int = 25
+```
+`(2+3)`の評価は一度だけであることが確認できる.
+
+```ocaml
+# let x = 2 + 5 in x + x * x;;
+          eval_dval: <DThunk 5> = 5
+          eval_dval: <DThunk 2> = 2
+        eval_dval: <DThunk (+) 2 5> = 7
+      eval_dval: <DThunk x> = 7
+      eval_dval: <DThunk x> = 7
+    eval_dval: <DThunk ( * ) x x> = 49
+    eval_dval: <DThunk x> = 7
+  eval_dval: <DThunk let "x" = ((+) 2 5) in ((+) x (( * ) x x))> = 56
+- : int = 56
+
+# (fun x -> x + x * x) (2 + 5);;
+          eval_dval: <DThunk 5> = 5
+          eval_dval: <DThunk 2> = 2
+        eval_dval: <DThunk (+) 2 5> = 7
+      eval_dval: <DThunk x> = 7
+      eval_dval: <DThunk x> = 7
+    eval_dval: <DThunk ( * ) x x> = 49
+    eval_dval: <DThunk x> = 7
+  eval_dval: <DThunk (fun#4 x -> (+) x (( * ) x x)) ((+) 2 5)> = 56
+- : int = 56
+```
+
+### hatten2
