@@ -35,7 +35,11 @@ rule main = parse
 | "if"         { Parser.IF }
 | "then"       { Parser.THEN }
 | "else"       { Parser.ELSE }
+| "match"      { Parser.MATCH }
+| "with"       { Parser.WITH }
+| "|"          { Parser.MIDDLEBAR }
 | "fun"        { Parser.FUN}
+| "function"   { Parser.FUNCTION }
 | "->"         { Parser.ARROW }
 
 | "true"       { Parser.BOOL (true) }

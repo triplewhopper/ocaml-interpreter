@@ -143,7 +143,7 @@ let initial_schema_env =
   in
   let cons =
     let alpha = Type.new_typevar () in
-    let ty_list = (Type.ty_list (alpha :> Type.t)) in  
+    let ty_list = Type.ty_list (alpha :> Type.t) in
     wrapper2 [ alpha ] alpha ty_list ty_list
   in
   SchemaEnv.empty |> SchemaEnv.extend "+" iii |> SchemaEnv.extend "-" iii
@@ -151,8 +151,7 @@ let initial_schema_env =
   |> SchemaEnv.extend "mod" iii |> SchemaEnv.extend ">" iib
   |> SchemaEnv.extend "<" iib |> SchemaEnv.extend ">=" iib
   |> SchemaEnv.extend "<=" iib |> SchemaEnv.extend "&&" bbb
-  |> SchemaEnv.extend "||" bbb
-  |> SchemaEnv.extend "::" cons
+  |> SchemaEnv.extend "||" bbb |> SchemaEnv.extend "::" cons
   |> SchemaEnv.extend "~-" (wrapper [] Type.ty_int Type.ty_int)
   |> SchemaEnv.extend "~+" (wrapper [] Type.ty_int Type.ty_int)
   |> SchemaEnv.extend "=" aa_bool

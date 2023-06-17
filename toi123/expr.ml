@@ -1,3 +1,5 @@
+type pattern = Pattern.pattern
+
 type t0 =
   [ `EConstInt of int
   | `EConstBool of bool
@@ -9,12 +11,13 @@ type t0 =
   | `ECall of t0 * t0
   | `ETuple of t0 list
   | `EList of t0 list
+  | `EMatch of t0 * (pattern * t0) list
   | `EFun of int * string * t0 (* #id var body *)
   | `ELet of (string, t0) Bindings.t * t0 (* let var = e1 in e2 *)
   | `ELetRec of
     (string, t0) Bindings.t * t0 (* let rec var = (e1: 'a->'b) in e2 *) ]
-
-type t =
+type equation = pattern * t
+and t =
   [ `EConstInt of int
   | `EConstBool of bool
   | `EConstUnit
@@ -23,6 +26,7 @@ type t =
   | `ECall of t * t
   | `ETuple of t list
   | `EList of t list
+  | `EMatch of t * equation list
   | `EFun of int * string * t (* #id var body *)
   | `ELet of (string, t) Bindings.t * t (* let var = e1 in e2 *)
   | `ELetRec of
@@ -49,8 +53,16 @@ let rec string_of_expr e =
       Printf.sprintf "`ECall (%s, %s)" s1 s2
   | `ETuple es -> Printf.sprintf "`ETuple ([%s])" (List.map f es |> String.concat "; ")
   | `EList es -> Printf.sprintf "`EList ([%s])" (List.map f es |> String.concat "; ")
+  | `EMatch (e, qs) ->
+      let sqs =
+        qs
+        |> List.map (fun (p, e) ->
+               Printf.sprintf "(%s, %s)" (Pattern.string_of_pattern p) (f e))
+        |> String.concat "; "
+      in
+      Printf.sprintf "`EMatch (%s, [%s])" (f e) sqs
   | `EFun (id, var, e) -> Printf.sprintf "`EFun(%d, \"%s\", %s)" id var (f e)
-  | `EDFun (id, var, e) -> Printf.sprintf "`EDFun(%d, \"%s\", %s)" id var (f e)
+  (* | `EDFun (id, var, e) -> Printf.sprintf "`EDFun(%d, \"%s\", %s)" id var (f e) *)
   | `ELet ((xs, es), e2) ->
       let sxs =
         xs |> List.map (Printf.sprintf "\"%s\"") |> String.concat "; "

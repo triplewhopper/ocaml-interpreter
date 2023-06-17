@@ -40,9 +40,28 @@ let rec eval_expr (env : value option ref Env.t) (e : expr) : value =
   | `ETuple es ->
       let vs = List.map (eval_expr env) es in
       VTuple vs
-  | `EList es -> 
+  | `EList es ->
       let vs = List.map (eval_expr env) es in
       VList vs
+  | `EMatch (e, qs) -> (
+      let v = eval_expr env e in
+      qs
+      |> List.fold_left
+           (fun acc (p, e) ->
+             if Option.is_some acc then acc
+             else
+               Match.find_match p v
+               |> Option.map (fun bindings ->
+                      let names, vs = bindings |> List.split in
+                      let values =
+                        List.rev_map Option.some vs |> List.rev_map ref
+                      in
+                      let env' = env |> Env.extends names values in
+                      eval_expr env' e))
+           None
+      |> function
+      | Some v -> v
+      | None -> raise Match.MatchFailed)
   | `EFun (_, var, body) -> VFunc (var, body, ref env)
   | `ELet ((vars, e1s), e2) ->
       let v1s = List.map (eval_expr env) e1s in

@@ -17,11 +17,16 @@
 %token EQ "=" LT "<" LE "<=" GT ">" GE ">="
 %token IF THEN ELSE
 %token LPAR "(" RPAR ")" LBRACK "[" RBRACK "]"
+%token MATCH WITH MIDDLEBAR "|"
 %token FUN ARROW "->"
+%token FUNCTION "function"
 %token REC
-%token SEMI ";" NOSEMI
-%nonassoc NOSEMI
-%nonassoc SEMI
+%token SEMI ";"
+%nonassoc NOCOMMA 
+%nonassoc COMMA
+%nonassoc NOBAR
+%nonassoc MIDDLEBAR
+
 
 %token SEMISEMI ";;"
 
@@ -55,14 +60,52 @@ let_expr:
   | ID let_expr                   { count:=(!count)+1; `EFun(!count, $1, $2) }
 
 expr:
+  | tuple_excluded_expr %prec NOCOMMA { $1 }
+  | tuple_expr { $1 }
+;
+%inline tuple_expr:
+  | tuple_excluded_expr "," tuple_excluded_expr_list { `ETuple($1::$3) }
+;
+
+tuple_excluded_expr_list:
+  | tuple_excluded_expr %prec NOCOMMA { [$1] }
+  | tuple_excluded_expr "," tuple_excluded_expr_list { $1::$3 }
+;
+
+%inline tuple_excluded_expr:
   | bindings=let_bindings; IN; e2=expr            {`ELet(bindings,e2) }
   | bindings=let_rec_bindings; IN; e2=expr        {`ELetRec(bindings,e2)}
   | FUN fun_abbr                                  { $2 }
+  | FUNCTION "|"? qs=clauses                      { count:=(!count)+1; let var = "$" ^ string_of_int !count in `EFun(!count, var, `EMatch (`EVar var, qs))}
   | IF; e1=expr; THEN; e2=expr; ELSE; e3=expr     { `EIf (e1, e2, e3) }
-  | bool_expr                  { $1 }  
-  | bool_expr "," expr                   { `ETuple([$1;$3]) }
-    // | DFUN; x=ID; ARROW; e=expr                     { count:=(!count)+1;`EDFun(!count, x,e) }
+  | MATCH; e=expr; WITH; "|"? qs=clauses { `EMatch (e, qs) }
+  | bool_expr { $1 }  
 ;
+
+clause:
+  | pat=pattern; ARROW; e=expr { (pat, e) }
+
+clauses:
+  | q=clause; "|" qs=clauses { q::qs }
+  | q=clause %prec NOBAR { [q] }
+
+pattern:
+  | tuple_pattern { $1 }
+;
+tuple_pattern:
+  | p=cons_pattern { p }
+  | p=cons_pattern; "," ps=separated_nonempty_list(",", cons_pattern) { Pattern.PCon ("tuple", p::ps) }
+;
+cons_pattern:
+  | p=atomic_pattern "::" ps=cons_pattern { Pattern.PCon ("::", [p; ps]) }
+  | p=atomic_pattern { p }
+
+atomic_pattern:
+  | INT { Pattern.PInt $1 }
+  | BOOL { Pattern.PBool $1 }
+  | ID { Pattern.PVar $1 }
+  | "[" "]" { Pattern.PCon ("[]", []) }
+  | "(" p=pattern ")" { p }
 
 
 fun_abbr:
@@ -124,11 +167,11 @@ atomic_expr:
   | ID              { `EVar($1) }
   | "(" ")"         { `EConstUnit }
   | "[" "]"         { `EList([]) }
-  | "["; es=semi_separated_list; "]" { `EList(es) }
+  | "["; es=semi_separated_exprs; "]" { `EList(es) }
   | "(" expr ")"    { $2 }
 
 ;
-semi_separated_list:
-  | e=expr %prec NOSEMI { [e] }
+semi_separated_exprs:
+  | e=expr { [e] }
   | e=expr SEMI {[e]}
-  | e=expr SEMI es=semi_separated_list { e :: es }
+  | e=expr SEMI es=semi_separated_exprs { e :: es }

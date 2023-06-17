@@ -38,7 +38,9 @@ let print_results results =
              names s)
 
 let read_eval_print (s_env : Infer.SchemaEnv.t) env =
-  if Options.inference_only then (Printf.eprintf "Inference only mode\n"; flush stderr);
+  if Options.inference_only then (
+    Printf.eprintf "Inference only mode\n";
+    flush stderr);
   let s_env = ref s_env and env = ref env and eof_flag = ref false in
   while not !eof_flag do
     print_string "# ";
@@ -60,22 +62,22 @@ let read_eval_print (s_env : Infer.SchemaEnv.t) env =
                if Options.debug_flag then (
                  print_results [ (s, res) ];
                  Printf.printf "schema env = %s\n"
-                   (Schema.string_of_senv s_env');
-                 Printf.printf "env={%s}\n"
-                   (List.filter_map
-                      (fun (k, v) ->
-                        match !v with
-                        | Some (Value.VBuiltinFun _) -> None
-                        | Some v' ->
-                            Some
-                              (Printf.sprintf "\"%s\": %s" k
-                                 (Value.string_of_value v'))
-                        | None ->
-                            failwith
-                              "This is a bug. Please Contact the author to fix \
-                               this")
-                      env'
-                   |> String.concat ";"));
+                   (Schema.string_of_senv s_env')
+                 (* Printf.printf "env={%s}\n"
+                    (List.filter_map
+                       (fun (k, v) ->
+                         match !v with
+                         | Some (Value.VBuiltinFun _) -> None
+                         | Some v' ->
+                             Some
+                               (Printf.sprintf "\"%s\": %s" k
+                                  (Value.string_of_value v'))
+                         | None ->
+                             failwith
+                               "This is a bug. Please Contact the author to fix \
+                                this")
+                       env'
+                    |> String.concat ";") *));
                (s_env', env'))
              (!s_env, !env)
       in
@@ -104,9 +106,10 @@ let read_eval_print (s_env : Infer.SchemaEnv.t) env =
         Printf.printf "Error: Recursive occurence of %s in %s\n"
           (Type.string_of (alpha :> Type.t))
           (Type.string_of t)
-    | Value.TypeError s -> Printf.printf "Error: %s\n" s
+    | Value.TypeError s -> Printf.printf "TypeError: %s\n" s
     | Eval.NotCallable v ->
         Printf.printf "Error: %s is not callable\n" (Value.string_of_value v)
+    | Match.MatchFailed -> Printf.printf "Error: Match failed\n"
     | Invalid_argument str -> Printf.printf "Error: %s\n" str
     | Division_by_zero -> Printf.printf "Exception: Division_by_zero\n"
     | Failure s -> s |> Printf.printf "Error: %s\n"
@@ -122,4 +125,5 @@ let read_eval_print (s_env : Infer.SchemaEnv.t) env =
    Printf.printf "%s = %s\n" id (string_of_value v);
    read_eval_print newenv *)
 (* let _ = record_backtrace true *)
-let () = read_eval_print Value.initial_schema_env Value.initial_env
+let () =
+  read_eval_print Eval.initial_schema_env Eval.initial_env;

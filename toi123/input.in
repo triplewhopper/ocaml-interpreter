@@ -1,0 +1,37 @@
+let x0 x = (x, x) in
+  let x1 y = x0 (x0 y) in
+  let x2 y = x1 (x1 y) in
+  let x3 y = x2 (x2 y) in
+  let x4 y = x3 (x3 y) in
+  let x5 y = x4 (x4 y) in
+  x5 (fun x->x);;
+
+let id x = x and square x = x * x in (id square) (id 42);;
+let id x = x;;
+let id x = x in (id 1, id true);;
+(fun x -> (x 1, x true)) id;;
+let id x y = y;;
+let k = id 1;;
+(k 1, k true);; 
+let rec f x = (f x, f x);;
+let rec f x = f x;;
+let rec even n = if n < 2 then n = 0 else odd (n-1)     
+      and  odd n = if n < 2 then n = 1 else even (n-1);;
+even 101;;
+odd 101;;
+let rec fact x =if x <= 1 then 1 else x * fact (x - 1);;
+fact 10;;
+let compose f g x = f (g x);;
+
+let rec repeat n f x = 
+  if n = 0 then x else f (repeat (n - 1) f x);;
+  (repeat 100 (fun x -> x + 1) 1),
+   repeat 100 (fun x -> if x then false else true) false;;
+
+let zero s z = z
+let succ n f x = f (n f x)
+let mult m n f x = m (n f) x
+let rec make n = if n=0 then zero else succ (make (n-1))
+make 10 (fun x -> x + 1) 0
+make 10 (fun p -> (fst p + 1, snd p - 1)) (0, 0)
+mult (make 6) (make 15) (fun x -> x+1) 0
