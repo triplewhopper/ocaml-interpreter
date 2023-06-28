@@ -5,7 +5,7 @@ A basic interpreter for OCaml subset. Assignment for Functional &amp; Logical Pr
 
 This repo is transferred from the local homework directory.
 # How to build
-Needs opam [dune](https://github.com/ocaml/dune).
+Needs [dune](https://github.com/ocaml/dune), menhir, ocamllex, and ocaml 4.14.4.
 ```zsh
 $ ls
 common       dune-project hatten1      report.md    toi123       toi4
